@@ -16,7 +16,7 @@ import math
 from typing import Literal
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Vec3 = tuple[float, float, float]
 
@@ -41,6 +41,14 @@ class Actuator(BaseModel):
     time_constant_s: float = 0.0           # first-order force lag (0 = instantaneous)
     mechanism: str = "hypothetical"        # physical momentum-exchange mechanism or 'hypothetical'
     radius_m: float = 0.011                # rotor radius (power model / ground effect)
+
+    @field_validator("max_force_n", "min_force_n", mode="before")
+    @classmethod
+    def _null_is_unbounded(cls, v, info):
+        """JSON has no infinity: null means unbounded (+inf for max, -inf for min)."""
+        if v is None:
+            return math.inf if info.field_name == "max_force_n" else -math.inf
+        return v
 
 
 class DragModel(BaseModel):
@@ -235,7 +243,7 @@ def set_cg(v: VehicleConfig, cg_m: Vec3) -> VehicleConfig:
     lim = np.array([out.length_m, out.width_m, out.height_m]) / 2 - np.array(t.size_m) / 2
     if np.any(np.abs(new) > lim + 1e-12):
         reach = (lim * t.mass_kg + np.abs(rest)) / M
-        raise ValueError(f"CG {tuple(np.round(np.asarray(cg_m) * 1000, 2))} mm not reachable by moving the "
+        raise ValueError(f"CG {[round(float(c) * 1000, 2) for c in cg_m]} mm not reachable by moving the "
                          f"{t.mass_kg * 1000:.2f} g trim mass inside the deck (approx. reach "
                          f"+-{np.round(reach * 1000, 2).tolist()} mm); add ballast or move components")
     t.pos_m = tuple(new.tolist())

@@ -105,16 +105,35 @@ def analyse(rm: ResolvedModel, mc: ModeConfig, plant) -> dict:
     mp_ok = plant.mp.valid
     con("inertia_valid", "inertia tensor physically valid", mp_ok, None, None, "", "mass_distribution",
         msg="; ".join(plant.mp.issues) or "positive definite, triangle inequality holds")
+    # which enabled constraint actually binds the available thrust
+    binding = []
+    if not ideal:
+        cand = {}
+        if mc.thrust_limit.enabled:
+            cand["thrust_limit"] = n * mc.thrust_limit.max_force_per_actuator_n
+        if mc.power_limit.enabled:
+            cand["power_limit"] = n * pw.thrust_at_power((mc.power_limit.max_electrical_power_w - pw.avionics_w) / n)
+        if rm.battery is not None:
+            cand["battery"] = n * pw.thrust_at_power((battery_max_power(rm.battery) - pw.avionics_w) / n)
+        if cand:
+            tmin = min(cand.values())
+            binding = [k for k, v in cand.items() if v <= tmin * (1 + 1e-9)]
+        if mc.efficiency.enabled and binding and "thrust_limit" not in binding:
+            binding.append("efficiency")
+        if mc.total_mass.enabled:
+            binding.append("total_mass")
+        if rm.battery is not None and rm.battery.include_mass:
+            binding.append("battery_mass")
     lim_toggles = [k for k, on in (("thrust_limit", mc.thrust_limit.enabled), ("power_limit", mc.power_limit.enabled),
                                    ("battery", mc.battery.enabled), ("efficiency", mc.efficiency.enabled),
                                    ("total_mass", mc.total_mass.enabled)) if on and not ideal]
-    con("hover_thrust", "available thrust >= weight", t_avail >= W, t_avail, W, "N", ",".join(lim_toggles) or "-",
+    con("hover_thrust", "available thrust >= weight", t_avail >= W, t_avail, W, "N", ",".join(binding) or "-",
         msg="cannot hover: thrust below weight" if t_avail < W else "")
     in_b = bool(np.all(u_h >= f_min - 1e-12) and np.all(u_h <= f_max + 1e-12))
     con("hover_allocation", "every actuator's hover force within bounds", in_b, float(np.max(u_h)), float(np.min(f_max)),
-        "N", "thrust_limit,mass_distribution", msg="CG offset may overload one actuator" if not in_b else "")
+        "N", ",".join(binding + ["mass_distribution"]), msg="CG offset may overload one actuator" if not in_b else "")
     con("thrust_margin", "thrust / weight >= 1.3 (control + climb margin)", tw >= 1.3, tw, 1.3, "-",
-        ",".join(lim_toggles) or "-", hard=False)
+        ",".join(binding) or "-", hard=False)
     if not ideal and rm.battery is not None:
         pb = battery_max_power(rm.battery)
         con("battery_power", "hover power <= battery max deliverable", p_load <= pb, p_load, pb, "W", "battery",
@@ -131,9 +150,9 @@ def analyse(rm: ResolvedModel, mc: ModeConfig, plant) -> dict:
         cap = mc.power_limit.max_electrical_power_w
         con("power_cap", "hover power <= actuator/ESC power cap", p_load <= cap, p_load, cap, "W", "power_limit")
     con("roll_pitch_authority", "roll/pitch authority >= 20 rad/s^2 at hover", min(auth["roll"], auth["pitch"]) >= 20,
-        min(auth["roll"], auth["pitch"]), 20, "rad/s^2", ",".join(lim_toggles) or "-")
+        min(auth["roll"], auth["pitch"]), 20, "rad/s^2", ",".join(binding) or "-")
     con("yaw_authority", "yaw authority >= 2 rad/s^2 at hover", auth["yaw"] >= 2, auth["yaw"], 2, "rad/s^2",
-        ",".join(lim_toggles) or "-", hard=False)
+        ",".join(binding) or "-", hard=False)
     if rm.thermal is not None and pw.kind == "rotor":
         eta = mc.efficiency.motor_efficiency if mc.efficiency.enabled else 1.0
         q = float(np.max(pw.actuator_power(u_h))) * (1 - eta)
@@ -163,5 +182,6 @@ def analyse(rm: ResolvedModel, mc: ModeConfig, plant) -> dict:
     return {"verdict": verdict, "metrics": metrics, "constraints": cons,
             "failing": [c["key"] for c in hard_fail], "marginal": [c["key"] for c in soft_fail],
             "limiting_toggles": sorted({t for c in hard_fail for t in c["toggle"].split(",") if t and t != "-"}),
+            "thrust_sources": {"force_limited_n": _num(t_force), "power_limited_n": _num(t_power), "binding": binding},
             "hover_forces_n": u_h.tolist(), "power_model": pw.model, "evidence": rm.evidence,
             "labels": rm.labels}

@@ -11,7 +11,10 @@ from fastapi.responses import Response
 
 from . import __version__
 from .modes import PRESETS, reality_preset
-from .sim import SimRequest, run
+from .controller import Gains
+from .mission import demo_mission
+from .sim import SimRequest, SimSettings, analyse_request, run
+from .vehicle import default_vehicle
 from .util import sanitize, versions
 
 app = FastAPI(title="Project Levitate - Visual Flight Physics Lab", version=__version__)
@@ -62,3 +65,19 @@ def simulate(req: SimRequest):
 def harness_status():
     from . import harness
     return J(harness.status())
+
+
+@app.get("/api/defaults")
+def defaults():
+    """Default objects for the parameter editor."""
+    return J({"vehicle": default_vehicle().model_dump(mode="json"), "gains": Gains().model_dump(),
+              "settings": SimSettings().model_dump(), "mission": [s.model_dump() for s in demo_mission()],
+              "presets": {p: reality_preset(p).model_dump(mode="json") for p in PRESETS}})
+
+
+@app.post("/api/analyse")
+def analyse_ep(req: SimRequest):
+    try:
+        return J(analyse_request(req))
+    except ValueError as e:
+        raise HTTPException(422, str(e))

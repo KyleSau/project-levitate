@@ -88,6 +88,16 @@ def impulse_force(mc: ModeConfig, t: float) -> np.ndarray:
     return F
 
 
+def analyse_request(req: SimRequest) -> dict:
+    """Static analysis only (no time integration): resolved vehicle, mass properties, feasibility."""
+    v0 = build_vehicle(req)
+    rm = resolve(v0, req.mode)
+    plant = Plant(rm, req.mode.environment)
+    return {"feasibility": analyse(rm, req.mode, plant), "vehicle": vehicle_payload(rm, plant), "labels": rm.labels,
+            "power_model": rm.power.model, "air": {"rho": rm.rho, "mu": rm.mu, "source": rm.air_source},
+            "evidence": rm.evidence, "contact_lambda_max": plant.contact_lambda_max}
+
+
 def run(req: SimRequest, progress=None) -> dict:
     t_wall = time.perf_counter()
     mc = req.mode

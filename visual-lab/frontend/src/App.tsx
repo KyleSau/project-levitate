@@ -167,6 +167,15 @@ export default function App() {
                 <Lab3D res={res} idx={idx} opt={opt} field={field} />
                 <SceneToggles opt={opt} setOpt={setOpt} />
                 <div className="labels-box">
+                  {res.feasibility.failing.length > 0 && (
+                    <div style={{ color: "var(--bad)", fontWeight: 600 }}>
+                      INFEASIBLE — failing constraints: {res.feasibility.constraints.filter((c) => c.hard && !c.passed)
+                        .map((c) => `${c.label} [${c.toggle}]`).join(" · ")}
+                    </div>
+                  )}
+                  {(res.summary.failures as string[]).length > 0 && (
+                    <div style={{ color: "var(--bad)" }}>simulated outcome: {(res.summary.failures as string[]).join(", ")}</div>
+                  )}
                   {res.labels.map((l, i) => <div key={i}>{l}</div>)}
                   <div>air: ρ = {res.air.rho.toFixed(4)} kg/m³, μ = {res.air.mu.toExponential(3)} Pa·s ({res.air.source})</div>
                   <div className="muted">motion = integrated forces/torques (recorded state replay; setpoint sphere = controller reference only)</div>
