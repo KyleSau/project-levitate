@@ -1,0 +1,628 @@
+<meta charset="utf-8">
+<title>LV-H1 Hoverboard</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+/* Layout: full-bleed 3D view; instrument strip on top, thumb controls at the bottom corners. Single dark cockpit look. */
+:root {
+  color-scheme: dark;
+  --ink: #e9f0f6; --muted: #8fa3b5; --glass: rgba(10, 16, 24, 0.72); --line: rgba(160, 190, 215, 0.22);
+  --cyan: #3fd2ff; --amber: #ffb648; --red: #ff5a5f; --green: #48e08f; --bg: #0b1016;
+  --num: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "Barlow", system-ui, -apple-system, sans-serif;
+}
+html, body { height: 100%; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.4 var(--body); overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+#app { position: fixed; inset: 0; }
+#app canvas { display: block; width: 100%; height: 100%; }
+.hud { position: fixed; left: 0; right: 0; top: 0; padding-top: calc(env(safe-area-inset-top, 0px) + 8px);
+  padding-left: max(10px, env(safe-area-inset-left, 0px)); padding-right: max(10px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+.strip { display: flex; gap: 6px; align-items: stretch; }
+.panel { background: var(--glass); border: 1px solid var(--line); border-radius: 10px; padding: 6px 9px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.batt { flex: 1.4; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.batt-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.big { font: 700 26px/1 var(--num); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.unit { font: 500 12px var(--num); color: var(--muted); margin-left: 2px; }
+.lbl { font: 600 10px/1.1 var(--body); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.gauge { position: relative; height: 12px; border-radius: 6px; background: rgba(255,255,255,.08); overflow: hidden; }
+.gauge i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, var(--green), #9cf06a); border-radius: 6px; transition: background .3s; }
+.gauge b { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--amber); opacity: .8; }
+.pwr { flex: 1; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
+.pbar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; display: flex; }
+.pbar span { height: 100%; }
+.mini { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.mini .panel { padding: 5px 7px; min-width: 0; }
+.mini .v { font: 600 19px/1.05 var(--num); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font: 600 11px/1 var(--body); letter-spacing: .06em; padding: 5px 8px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line); color: var(--muted); }
+.chip.on { color: var(--bg); background: var(--cyan); border-color: var(--cyan); }
+.chip.warn { color: var(--bg); background: var(--amber); border-color: var(--amber); }
+.chip.bad { color: #fff; background: var(--red); border-color: var(--red); }
+.toast { position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%); background: var(--glass); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-weight: 600; max-width: min(86vw, 360px); text-align: center; pointer-events: none; transition: opacity .3s; }
+.controls { position: fixed; left: 0; right: 0; bottom: 0; padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+  padding-left: max(14px, env(safe-area-inset-left, 0px)); padding-right: max(14px, env(safe-area-inset-right, 0px));
+  display: flex; justify-content: space-between; align-items: flex-end; pointer-events: none; }
+.joy { width: 138px; height: 138px; border-radius: 50%; background: radial-gradient(circle, rgba(63,210,255,.10), rgba(10,16,24,.55) 70%); border: 1px solid var(--line); position: relative; pointer-events: auto; touch-action: none; }
+.joy::before { content: "FWD"; position: absolute; top: 8px; left: 50%; transform: translateX(-50%); font: 600 10px var(--body); color: var(--muted); letter-spacing: .1em; }
+.joy::after { content: "REV"; position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); font: 600 10px var(--body); color: var(--muted); letter-spacing: .1em; }
+.knob { position: absolute; width: 58px; height: 58px; left: 40px; top: 40px; border-radius: 50%; background: rgba(233,240,246,.92); box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+.btns { display: grid; grid-template-columns: 78px 78px; gap: 10px; pointer-events: auto; }
+.btn { height: 64px; border-radius: 16px; border: 1px solid var(--line); background: var(--glass); color: var(--ink); font: 700 15px/1 var(--num); letter-spacing: .08em; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); touch-action: none; }
+.btn small { font: 500 10px var(--body); letter-spacing: .04em; color: var(--muted); }
+.btn.on { background: var(--cyan); color: var(--bg); border-color: var(--cyan); }
+.btn.on small { color: #083041; }
+.btn.hop.on { background: var(--amber); border-color: var(--amber); }
+.btn:focus-visible, .sheet button:focus-visible, .sheet input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; max-height: 72%; overflow: auto; background: rgba(9, 14, 21, 0.96); border-top: 1px solid var(--line); border-radius: 16px 16px 0 0;
+  padding: 14px max(16px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 16px) max(16px, env(safe-area-inset-left, 0px)); display: flex; flex-direction: column; gap: 14px; touch-action: pan-y; }
+.sheet h2 { font: 700 20px var(--num); margin: 0; letter-spacing: .04em; }
+.sheet .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sheet input[type=range] { flex: 1; accent-color: var(--cyan); min-width: 0; }
+.sheet .val { font: 600 16px var(--num); min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+.seg { display: flex; gap: 6px; flex-wrap: wrap; }
+.seg button { flex: 1; min-width: 70px; padding: 9px 6px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: var(--ink); font: 600 13px var(--body); }
+.seg button.on { background: var(--cyan); color: var(--bg); border-color: var(--cyan); }
+.cells { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 38px); gap: 4px; }
+.cells div { border-radius: 6px; display: flex; align-items: center; justify-content: center; font: 600 13px var(--num); color: var(--bg); font-variant-numeric: tabular-nums; }
+.note { font-size: 12.5px; color: var(--muted); max-width: 62ch; }
+.gear { position: fixed; right: max(10px, env(safe-area-inset-right, 0px)); top: calc(env(safe-area-inset-top, 0px) + 196px); pointer-events: auto; width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass); color: var(--ink); font-size: 20px; }
+.cam { position: fixed; left: max(10px, env(safe-area-inset-left, 0px)); top: calc(env(safe-area-inset-top, 0px) + 196px); pointer-events: auto; height: 44px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass); color: var(--ink); font: 600 13px var(--body); }
+.intro { position: fixed; inset: 0; background: rgba(5, 8, 12, .82); display: flex; align-items: center; justify-content: center; padding: 20px max(16px, env(safe-area-inset-right, 0px)) 20px max(16px, env(safe-area-inset-left, 0px)); }
+.intro .card { max-width: 420px; background: #0e151e; border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+.intro h1 { font: 700 30px/1 var(--num); margin: 0; letter-spacing: .02em; }
+.intro ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.intro button { margin-top: 6px; height: 48px; border-radius: 12px; border: none; background: var(--cyan); color: var(--bg); font: 700 17px var(--num); letter-spacing: .08em; }
+@media (max-width: 380px) { .mini .v { font-size: 16px; } .big { font-size: 22px; } .joy { width: 124px; height: 124px; } .knob { left: 33px; top: 33px; } }
+@media (prefers-reduced-motion: reduce) { .toast, .gauge i { transition: none; } }
+</style>
+
+<div id="app"></div>
+
+<div class="hud">
+  <div class="strip">
+    <div class="panel batt">
+      <div class="batt-row"><span class="lbl">Battery 5.4 kWh</span><span class="lbl" id="remain">—</span></div>
+      <div class="batt-row"><span><span class="big" id="soc">100</span><span class="unit">%</span></span>
+        <span class="mono"><span class="big" id="volts" style="font-size:18px">—</span><span class="unit">V</span> <span class="big" id="amps" style="font-size:18px">—</span><span class="unit">A</span></span></div>
+      <div class="gauge"><i id="socbar" style="width:100%"></i></div>
+      <div class="batt-row"><span class="lbl">Used <span id="wh">0</span> Wh</span><span class="lbl" id="burst"></span></div>
+    </div>
+    <div class="panel pwr">
+      <span class="lbl">Power draw</span>
+      <span><span class="big" id="kw">0.0</span><span class="unit">kW</span></span>
+      <div class="pbar"><span id="pl" style="background:var(--cyan)"></span><span id="pt" style="background:var(--amber)"></span></div>
+      <span class="lbl"><span style="color:var(--cyan)">lift</span> <span id="kwl">0</span> · <span style="color:var(--amber)">drive</span> <span id="kwt">0</span></span>
+    </div>
+  </div>
+  <div class="mini">
+    <div class="panel"><div class="lbl">Ride height</div><div class="v"><span id="ride">—</span><span class="unit">cm</span></div></div>
+    <div class="panel"><div class="lbl">Air gap</div><div class="v"><span id="gap">—</span><span class="unit">mm</span></div></div>
+    <div class="panel"><div class="lbl">Speed</div><div class="v"><span id="spd">0</span><span class="unit">km/h</span></div></div>
+    <div class="panel"><div class="lbl">Mass</div><div class="v"><span id="mass">—</span><span class="unit">kg</span></div></div>
+  </div>
+  <div class="chips" id="chips"></div>
+</div>
+
+<button class="cam" id="cam" type="button" aria-label="Change camera">Chase cam</button>
+<button class="gear" id="gear" type="button" aria-label="Settings">⚙</button>
+<div class="toast" id="toast" style="opacity:0"></div>
+
+<div class="controls">
+  <div class="joy" id="joy" aria-label="Drive joystick"><div class="knob" id="knob"></div></div>
+  <div class="btns">
+    <button class="btn" id="bRider" type="button">RIDER<small>step on</small></button>
+    <button class="btn" id="bLift" type="button">LIFT<small>fans off</small></button>
+    <button class="btn hop" id="bHop" type="button" style="grid-column: span 2">HOP<small>hold to jump</small></button>
+  </div>
+</div>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="row"><h2>Board & physics</h2><button class="btn" id="close" type="button" style="height:40px;width:70px">Close</button></div>
+  <div>
+    <div class="lbl" style="margin-bottom:6px">Lift fan control</div>
+    <div class="seg" id="mode"><button type="button" data-v="hold" class="on">Hold air gap</button><button type="button" data-v="fixed">Fixed fan speed</button></div>
+    <p class="note" style="margin-top:6px">Hold: fans speed up to keep the gap when you step on (costs power). Fixed: fans stay put, so your weight pushes the board down.</p>
+  </div>
+  <div class="row"><label for="gapT">Target air gap</label><input id="gapT" type="range" min="4" max="30" step="1" value="12"><span class="val" id="gapTv">12 mm</span></div>
+  <div class="row"><label for="fanF">Fixed fan speed</label><input id="fanF" type="range" min="40" max="100" step="1" value="66"><span class="val" id="fanFv">66 %</span></div>
+  <div class="row"><label for="hopH">Hop ceiling</label><input id="hopH" type="range" min="0.3" max="1.5" step="0.05" value="1"><span class="val" id="hopHv">1.00 m</span></div>
+  <div class="row"><label for="riderM">Rider weight</label><input id="riderM" type="range" min="45" max="135" step="0.5" value="90.7"><span class="val" id="riderMv">200 lb</span></div>
+  <div>
+    <div class="lbl" style="margin-bottom:6px">Air gap per cushion compartment (top view, nose →)</div>
+    <div class="cells" id="cells"></div>
+  </div>
+  <div>
+    <div class="lbl" style="margin-bottom:6px">Time</div>
+    <div class="seg" id="tscale"><button type="button" data-v="1" class="on">Real time 1×</button><button type="button" data-v="0.25">Slow ¼×</button></div>
+  </div>
+  <div class="seg"><button type="button" id="reset">Reset to start</button><button type="button" id="toDock">Go to dock</button><button type="button" id="toPond">Go to pond</button></div>
+  <p class="note">Physics runs at 1,000 steps per second in real time: rigid-body dynamics, six skirted air-cushion compartments with variable-pitch lift fans, skirt leakage, rear thrust fans, aerodynamic and skirt drag, ground contact, water buoyancy and a 24S14P lithium-ion pack with voltage sag and current limits. Board 91 kg, deck 1.8 × 0.72 m, skirt 15 cm. Fan maps, efficiencies and the pack are engineering assumptions, not measurements.</p>
+  <p class="note">Textures: Poly Haven (CC0). Rider: Mixamo-rigged "Soldier" character from the three.js examples, with Mixamo idle/walk clips and a physics-driven riding pose.</p>
+</div>
+
+<div class="intro" id="intro">
+  <div class="card">
+    <h1>LV-H1 air-cushion hoverboard</h1>
+    <p class="note">A 200 lb rider on a 1.8 m board that floats on a skirted air cushion and can hop about a metre. Everything you see is computed in real time.</p>
+    <ol>
+      <li><b>LIFT</b> spins up the cushion fans.</li>
+      <li><b>RIDER</b> steps you on or off. Watch the ride height and power.</li>
+      <li>Joystick: up/down = forward/reverse, left/right = turn.</li>
+      <li>Hold <b>HOP</b> to jump; let go to come down on the cushion.</li>
+      <li><b>LIFT</b> again to land on the skids.</li>
+    </ol>
+    <button type="button" id="go">Start</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="physics.js"></script>
+<script>
+(() => {
+const HP = window.HoverPhysics, S = HP.SPEC, W = HP.WORLD;
+const sim = new HP.Sim();
+const $ = (id) => document.getElementById(id);
+const T3 = (p) => new THREE.Vector3(p[0], p[2], -p[1]);                 // physics (z up) -> three (y up)
+const Q3 = (q) => new THREE.Quaternion(q[1], q[3], -q[2], q[0]);
+
+// ---------------------------------------------------------------- renderer & scene
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputEncoding = THREE.sRGBEncoding; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
+$("app").appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xa9c3d6); scene.fog = new THREE.Fog(0xa9c3d6, 40, 140);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 400);
+scene.add(new THREE.HemisphereLight(0xdcecff, 0x4a4f3a, 0.65));
+const sun = new THREE.DirectionalLight(0xfff3e0, 2.2);
+sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 0.5, far: 40 });
+sun.shadow.bias = -0.0004; scene.add(sun); scene.add(sun.target);
+
+// ---------------------------------------------------------------- textures (Poly Haven CC0, 512 px)
+const loader = new THREE.TextureLoader();
+function mat(name, repeat, opts = {}) {
+  const tex = (m) => { const t = loader.load(`tex/${name}_${m}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat[0], repeat[1]); t.anisotropy = 4; return t; };
+  const map = tex("diff"); map.encoding = THREE.sRGBEncoding;
+  return new THREE.MeshStandardMaterial({ map, normalMap: tex("nor_gl"), roughnessMap: tex("rough"), ...opts });
+}
+const TILE = 2.5;   // metres per texture tile, so features stay at true size
+const ground = (w, h, m, x, z, y = 0) => {
+  const g = new THREE.Mesh(new THREE.PlaneGeometry(w, h), m); g.rotation.x = -Math.PI / 2; g.position.set(x, y, z); g.receiveShadow = true; scene.add(g); return g;
+};
+const LEN = 300;
+ground(LEN, 8, mat("asphalt_02", [LEN / TILE, 8 / TILE], { roughness: 1 }), 0, 0, 0);
+ground((LEN / 2) - 8, LEN / 2 - 4, mat("concrete_floor_02", [(LEN / 2 - 8) / TILE, (LEN / 2 - 4) / TILE]), 8 + (LEN / 2 - 8) / 2, -(4 + (LEN / 2 - 4) / 2), -0.001);
+ground((LEN / 2) - 8, LEN / 2 - 4, mat("concrete_floor_02", [(LEN / 2 - 8) / TILE, (LEN / 2 - 4) / TILE]), 8 + (LEN / 2 - 8) / 2, (4 + (LEN / 2 - 4) / 2), -0.001);
+const grassMat = mat("sparse_grass", [1, 1]);
+const grassW = LEN / 2 + 8, grassD = LEN / 2 - 4;
+const gm = mat("sparse_grass", [grassW / 2, grassD / 2]);
+ground(grassW, grassD, gm, 8 - grassW / 2, -(4 + grassD / 2), -0.001);
+ground(grassW, grassD, gm, 8 - grassW / 2, (4 + grassD / 2), -0.001);
+// road markings (true size: 3 m dashes, 6 m gaps, 12 cm wide)
+const lineMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.6 });
+for (let x = -LEN / 2; x < LEN / 2; x += 9) ground(3, 0.12, lineMat, x + 1.5, 0, 0.002);
+for (const z of [-3.9, 3.9]) ground(LEN, 0.12, lineMat, 0, z, 0.002);
+// pond
+const waterMat = new THREE.MeshStandardMaterial({ color: 0x2c5566, roughness: 0.08, metalness: 0.1, transparent: true, opacity: 0.92 });
+const waterNormal = loader.load("tex/concrete_floor_02_nor_gl.jpg"); waterNormal.wrapS = waterNormal.wrapT = THREE.RepeatWrapping; waterNormal.repeat.set(4, 4);
+waterMat.normalMap = waterNormal; waterMat.normalScale.set(0.35, 0.35);
+const pond = new THREE.Mesh(new THREE.CircleGeometry(W.pond.r, 64), waterMat);
+pond.rotation.x = -Math.PI / 2; pond.position.set(W.pond.x, 0.004, -W.pond.y); pond.receiveShadow = true; scene.add(pond);
+const rim = new THREE.Mesh(new THREE.RingGeometry(W.pond.r, W.pond.r + 0.35, 64), mat("concrete_floor_02", [6, 1]));
+rim.rotation.x = -Math.PI / 2; rim.position.set(W.pond.x, 0.006, -W.pond.y); scene.add(rim);
+// loading dock (0.30 m) to hop onto
+const d = W.dock, dockMat = mat("concrete_floor_02", [(d.x1 - d.x0) / TILE, (d.y1 - d.y0) / TILE]);
+const dock = new THREE.Mesh(new THREE.BoxGeometry(d.x1 - d.x0, d.h, d.y1 - d.y0), dockMat);
+dock.position.set((d.x0 + d.x1) / 2, d.h / 2, -(d.y0 + d.y1) / 2); dock.castShadow = dock.receiveShadow = true; scene.add(dock);
+const stripe = new THREE.Mesh(new THREE.BoxGeometry(d.x1 - d.x0 + 0.02, 0.06, d.y1 - d.y0 + 0.02), new THREE.MeshStandardMaterial({ color: 0xf2c230 }));
+stripe.position.set(dock.position.x, d.h - 0.03, dock.position.z); scene.add(stripe);
+// scale references: 1 m measuring post with 10 cm bands, lamp posts, traffic cones
+const post = new THREE.Group();
+for (let i = 0; i < 10; i++) { const b = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.06), new THREE.MeshStandardMaterial({ color: i % 2 ? 0xffffff : 0xd8262c })); b.position.y = 0.05 + i * 0.1; b.castShadow = true; post.add(b); }
+post.position.set(3, 0, -4.6); scene.add(post);
+const coneMat = new THREE.MeshStandardMaterial({ color: 0xff6a1a, roughness: 0.6 });
+for (const [x, y] of [[12, 3], [20, -3], [28, 3], [36, -3], [-6, -3]]) {
+  const c = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.46, 20), coneMat); c.position.set(x, 0.23, -y); c.castShadow = true; scene.add(c);
+}
+const poleMat = new THREE.MeshStandardMaterial({ color: 0x6c7680, metalness: 0.6, roughness: 0.4 });
+for (let x = -60; x <= 60; x += 20) for (const y of [-5.2, 5.2]) {
+  const p = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 6, 10), poleMat); p.position.set(x, 3, -y); p.castShadow = true; scene.add(p);
+}
+const treeMat = new THREE.MeshStandardMaterial({ color: 0x2f5a2c, roughness: 0.9 }), trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a4130 });
+for (const [x, y] of [[-25, 20], [-30, 8], [-4, 24], [-22, -18], [-8, -22], [-35, -10], [2, 30]]) {
+  const t = new THREE.Group();
+  const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 2.2, 8), trunkMat); tr.position.y = 1.1; t.add(tr);
+  const cr = new THREE.Mesh(new THREE.ConeGeometry(1.6, 4.5, 10), treeMat); cr.position.y = 4.2; t.add(cr);
+  t.traverse((o) => { o.castShadow = true; }); t.position.set(x, 0, -y); scene.add(t);
+}
+
+// ---------------------------------------------------------------- board model (built from the physics dimensions)
+const board = new THREE.Group(); scene.add(board);
+const deckMat = mat("blue_metal_plate", [1.8, 0.72], { metalness: 0.55 });
+const skirtMat = mat("fabric_leather_02", [6, 0.5], { color: 0x2b2f35, side: THREE.DoubleSide, roughness: 0.85 });
+const gripMat = mat("fabric_leather_02", [3, 1.2], { color: 0x15171a, roughness: 1 });
+function roundedRect(L, Wd, r, n = 8) {
+  const pts = [], c = [[L / 2 - r, Wd / 2 - r, 0], [-L / 2 + r, Wd / 2 - r, Math.PI / 2], [-L / 2 + r, -Wd / 2 + r, Math.PI], [L / 2 - r, -Wd / 2 + r, 1.5 * Math.PI]];
+  for (const [cx, cy, a0] of c) for (let i = 0; i <= n; i++) { const a = a0 + (i / n) * Math.PI / 2; pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); }
+  return pts;
+}
+const outline = roundedRect(S.L, S.W, 0.16);
+const shape = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
+const deckGeo = new THREE.ExtrudeGeometry(shape, { depth: S.deckThick, bevelEnabled: true, bevelSize: 0.01, bevelThickness: 0.01, bevelSegments: 2 });
+const deck = new THREE.Mesh(deckGeo, deckMat); deck.rotation.x = -Math.PI / 2; deck.castShadow = true; deck.receiveShadow = true; board.add(deck);
+// grip pad where the rider stands
+const pad = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.006, 0.5), gripMat); pad.position.set(0.05, S.deckThick + 0.012, 0); pad.receiveShadow = true; board.add(pad);
+// LED edge strip
+const ledMat = new THREE.MeshBasicMaterial({ color: 0x3fd2ff });
+const led = new THREE.Mesh(new THREE.ExtrudeGeometry(new THREE.Shape(roundedRect(S.L + 0.025, S.W + 0.025, 0.17).map(([x, y]) => new THREE.Vector2(x, y))), { depth: 0.012, bevelEnabled: false }), ledMat);
+led.rotation.x = -Math.PI / 2; led.position.y = 0.02; board.add(led);
+// lift fans: grille rings, hubs and blades (visible through the deck), positions = compartment centroids
+const C = HP.compartments(S), fans = [];
+const ringMat = new THREE.MeshStandardMaterial({ color: 0x1b2026, metalness: 0.7, roughness: 0.35 });
+const bladeMat = new THREE.MeshStandardMaterial({ color: 0xc9d2da, metalness: 0.6, roughness: 0.3 });
+const blurMat = new THREE.MeshBasicMaterial({ color: 0xb8c4cf, transparent: true, opacity: 0, depthWrite: false });
+for (const c of C) {
+  const g = new THREE.Group(); g.position.copy(T3([c.cx, c.cy, S.deckThick + 0.004]));
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(S.fan.diam / 2, 0.012, 8, 40), ringMat); ring.rotation.x = Math.PI / 2; g.add(ring);
+  for (let k = 0; k < 4; k++) { const bar = new THREE.Mesh(new THREE.BoxGeometry(S.fan.diam, 0.006, 0.012), ringMat); bar.rotation.y = k * Math.PI / 4; bar.position.y = 0.012; g.add(bar); }
+  const hubSpin = new THREE.Group(); g.add(hubSpin);
+  hubSpin.add(new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.03, 16), ringMat));
+  for (let k = 0; k < 7; k++) { const bl = new THREE.Mesh(new THREE.BoxGeometry(S.fan.diam / 2 - 0.05, 0.004, 0.035), bladeMat); bl.position.x = (S.fan.diam / 2 - 0.05) / 2 + 0.04; const piv = new THREE.Group(); piv.rotation.y = k * 2 * Math.PI / 7; bl.rotation.x = 0.35; piv.add(bl); hubSpin.add(piv); }
+  const blur = new THREE.Mesh(new THREE.CircleGeometry(S.fan.diam / 2 - 0.01, 32), blurMat.clone()); blur.rotation.x = -Math.PI / 2; blur.position.y = 0.002; g.add(blur);
+  board.add(g); fans.push({ hubSpin, blur });
+}
+// rear thrust fans
+const thr = [];
+for (const s of [1, -1]) {
+  const g = new THREE.Group(); g.position.copy(T3([-0.78, 0.25 * s, 0.18]));
+  const duct = new THREE.Mesh(new THREE.CylinderGeometry(S.thrust.diam / 2 + 0.02, S.thrust.diam / 2 + 0.02, 0.16, 32, 1, true), new THREE.MeshStandardMaterial({ color: 0x20262d, metalness: 0.6, roughness: 0.35, side: THREE.DoubleSide }));
+  duct.rotation.z = Math.PI / 2; duct.castShadow = true; g.add(duct);
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(S.thrust.diam / 2 + 0.02, 0.012, 8, 32), ledMat); lip.rotation.y = Math.PI / 2; lip.position.x = -0.08; g.add(lip);
+  const spin = new THREE.Group(); spin.rotation.z = Math.PI / 2; g.add(spin);
+  for (let k = 0; k < 5; k++) { const bl = new THREE.Mesh(new THREE.BoxGeometry(S.thrust.diam / 2 - 0.03, 0.004, 0.04), bladeMat); bl.position.x = (S.thrust.diam / 2 - 0.03) / 2 + 0.02; const piv = new THREE.Group(); piv.rotation.y = k * 2 * Math.PI / 5; bl.rotation.x = 0.4; piv.add(bl); spin.add(piv); }
+  const blur = new THREE.Mesh(new THREE.CircleGeometry(S.thrust.diam / 2 - 0.01, 32), blurMat.clone()); blur.rotation.y = Math.PI / 2; g.add(blur);
+  const strut = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.2, 0.03), ringMat); strut.position.set(0.05, -0.1, 0); g.add(strut);
+  board.add(g); thr.push({ spin, blur });
+}
+// skids
+for (const [x, y] of [[0.6, 0.25], [0.6, -0.25], [-0.6, 0.25], [-0.6, -0.25]]) {
+  const sk = new THREE.Mesh(new THREE.BoxGeometry(0.22, S.skidDepth, 0.04), ringMat); sk.position.copy(T3([x, y, -S.skidDepth / 2])); board.add(sk);
+}
+// skirt: lofted bag between the deck edge and the hem, vertices updated every frame from the ground clearance
+const SK_RINGS = 6, skOut = outline.length;
+const skGeo = new THREE.BufferGeometry();
+const skPos = new Float32Array(skOut * SK_RINGS * 3), skUv = new Float32Array(skOut * SK_RINGS * 2), skIdx = [];
+for (let r = 0; r < SK_RINGS; r++) for (let i = 0; i < skOut; i++) {
+  const k = r * skOut + i; skUv[2 * k] = i / (skOut - 1) * 8; skUv[2 * k + 1] = r / (SK_RINGS - 1);
+  if (r < SK_RINGS - 1) { const a = k, b = r * skOut + (i + 1) % skOut, c2 = a + skOut, d2 = b + skOut; skIdx.push(a, c2, b, b, c2, d2); }
+}
+skGeo.setAttribute("position", new THREE.BufferAttribute(skPos, 3)); skGeo.setAttribute("uv", new THREE.BufferAttribute(skUv, 2)); skGeo.setIndex(skIdx);
+const skirt = new THREE.Mesh(skGeo, skirtMat); skirt.castShadow = true; board.add(skirt);
+const tmpV = new THREE.Vector3();
+function updateSkirt(inflate) {
+  // inflate 0..1 from cushion pressure; hem follows the ground where it touches (fabric folds instead of passing through)
+  for (let i = 0; i < skOut; i++) {
+    const [ox, oy] = outline[i];
+    tmpV.set(ox, -S.skirtDepth, -oy); board.localToWorld(tmpV);
+    const clear = tmpV.y - W.ground(tmpV.x, -tmpV.z).h;           // hem clearance (m), negative = would penetrate
+    const depthFull = S.skirtDepth * (0.55 + 0.45 * inflate);
+    const depth = Math.max(0.03, Math.min(depthFull, depthFull + Math.min(clear, 0)));
+    for (let r = 0; r < SK_RINGS; r++) {
+      const f = r / (SK_RINGS - 1);
+      const bulge = (0.03 + 0.03 * inflate) * Math.sin(Math.PI * f);
+      const nx = ox / Math.hypot(ox, oy), ny = oy / Math.hypot(ox, oy);
+      const k = (r * skOut + i) * 3;
+      skPos[k] = ox + nx * bulge - nx * 0.02 * f; skPos[k + 1] = -depth * f; skPos[k + 2] = -(oy + ny * bulge - ny * 0.02 * f);
+    }
+  }
+  skGeo.attributes.position.needsUpdate = true; skGeo.computeVertexNormals();
+}
+
+// ---------------------------------------------------------------- rider (1.75 m figure built from capsules)
+function limb(r, l, m) { const g = new THREE.Group(); const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.9, l, 12), m); cyl.position.y = -l / 2; g.add(cyl);
+  const j = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), m); g.add(j); const e = new THREE.Mesh(new THREE.SphereGeometry(r * 0.9, 12, 10), m); e.position.y = -l; g.add(e); return g; }
+const skin = new THREE.MeshStandardMaterial({ color: 0xc99372, roughness: 0.7 }), shirt = new THREE.MeshStandardMaterial({ color: 0x2f6fb3, roughness: 0.8 }),
+  pants = new THREE.MeshStandardMaterial({ color: 0x2a2d33, roughness: 0.85 }), shoe = new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.6 }), helm = new THREE.MeshStandardMaterial({ color: 0xffb648, roughness: 0.4, metalness: 0.2 });
+const rider = new THREE.Group(); scene.add(rider);
+const body = new THREE.Group(); rider.add(body);
+const hips = 0.92;
+const legL = limb(0.075, 0.46, pants), legR = limb(0.075, 0.46, pants), shinL = limb(0.06, 0.44, pants), shinR = limb(0.06, 0.44, pants);
+legL.position.set(0.2, hips, 0); legR.position.set(-0.2, hips, 0); legL.add(shinL); legR.add(shinR); shinL.position.y = -0.46; shinR.position.y = -0.46;
+for (const s of [shinL, shinR]) { const f = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.07, 0.27), shoe); f.position.set(0, -0.47, 0.06); s.add(f); }
+body.add(legL, legR);
+const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.15, 0.58, 14), shirt); torso.position.y = hips + 0.32; body.add(torso);
+const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 18, 14), skin); head.position.y = hips + 0.73; body.add(head);
+const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.125, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2), helm); helmet.position.y = hips + 0.75; body.add(helmet);
+const armL = limb(0.05, 0.55, shirt), armR = limb(0.05, 0.55, shirt); armL.position.set(0.21, hips + 0.56, 0); armR.position.set(-0.21, hips + 0.56, 0); body.add(armL, armR);
+rider.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+// Mixamo "Soldier" character (three.js examples, r128): Idle / Walk clips + procedural riding pose.
+// The capsule figure above stays as a fallback until (or if) the model fails to load.
+let soldier = null, mixer = null, walkW = 0;
+const acts = {}, bones = {};
+const POSE = { hipFlex: 0.55, knee: 1.0, spread: 0.32, armOut: 1.0, crouchDrop: 0.13 };
+// The model ships as base64 text (the host serves .txt, not .glb); decode and hand the bytes to the glTF parser.
+// Rider model: Mixamo "Soldier" from the three.js examples. Not redistributed in this repo (Mixamo terms): a local base64 copy
+// is used if present (private deployments), otherwise it is loaded directly from the three.js repository at runtime.
+const SOLDIER_URL = "https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/models/gltf/Soldier.glb";
+if (THREE.GLTFLoader) fetch("models/soldier.glb.b64.txt").then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); })
+  .catch(() => fetch(SOLDIER_URL).then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })).then((data) => {
+  let buf = data;                                   // ArrayBuffer (remote GLB) or base64 text (local copy)
+  if (typeof data === "string") { const bin = atob(data.trim()), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); buf = bytes.buffer; }
+  return new Promise((res, rej) => new THREE.GLTFLoader().parse(buf, "models/", res, rej));
+}).then((g) => {
+  soldier = g.scene;
+  const box = new THREE.Box3().setFromObject(soldier);
+  soldier.scale.setScalar(1.75 / (box.max.y - box.min.y));               // rider height 1.75 m, as in the physics model
+  soldier.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } if (o.isBone) bones[o.name] = o; });
+  mixer = new THREE.AnimationMixer(soldier);
+  for (const clip of g.animations) acts[clip.name] = mixer.clipAction(clip);
+  acts.Idle.play(); acts.Walk.play(); acts.Walk.setEffectiveWeight(0);
+  soldier.rotation.y = Math.PI;                                          // model faces -z; rider frame faces +z
+  rider.add(soldier); body.visible = false;
+}).catch((e) => console.warn("character model failed to load; using the simple figure", e));
+// Pose offsets are applied about CHARACTER-space axes (model space: forward = -z, up = +y, character's right = +x),
+// converted into each bone's local frame, because Mixamo bone axes differ per bone and per clip.
+const AX = new THREE.Vector3(1, 0, 0), AZ = new THREE.Vector3(0, 0, 1);
+const _qa = new THREE.Quaternion(), _qp = new THREE.Quaternion(), _qs = new THREE.Quaternion(), _qd = new THREE.Quaternion();
+function bend(name, axis, ang) {
+  const b = bones[name]; if (!b || !ang) return;
+  soldier.getWorldQuaternion(_qs).invert();
+  b.parent.getWorldQuaternion(_qp); _qp.premultiply(_qs);               // parent orientation in character space
+  _qa.setFromAxisAngle(axis, ang);
+  _qd.copy(_qp).invert().multiply(_qa).multiply(_qp);                   // character-space rotation in the bone's parent frame
+  b.quaternion.premultiply(_qd);
+  b.updateMatrixWorld(true);
+}
+function ridePose(k, armK) {
+  // k: crouch 0..1, armK: arms-out amount. Signs (model space): +X swings a limb forward, +Z swings it toward +x (character's right)
+  soldier.updateMatrixWorld(true);
+  bend("mixamorigSpine", AX, -0.22 * k);                                 // lean the chest forward over the knees
+  for (const [s, side] of [["Left", -1], ["Right", 1]]) {
+    bend(`mixamorig${s}UpLeg`, AX, POSE.hipFlex * k);                   // thigh forward
+    bend(`mixamorig${s}UpLeg`, AZ, side * POSE.spread);                 // feet apart along the deck
+    bend(`mixamorig${s}Leg`, AX, -POSE.knee * k);                       // shin back = knee bend
+    bend(`mixamorig${s}Foot`, AX, (POSE.knee - POSE.hipFlex) * 0.5 * k); // keep the sole flat on the deck
+    bend(`mixamorig${s}Arm`, AZ, side * POSE.armOut * armK);            // arms out for balance
+  }
+  soldier.position.y = -POSE.crouchDrop * k;
+}
+
+let riderWorld = new THREE.Vector3(0, 0, -1.0);          // where the rider stands when off the board
+let riderBlend = 0;
+let riderOffQ = new THREE.Quaternion();
+
+// ---------------------------------------------------------------- air-jet particles (dust / spray at the skirt hem)
+const NP = 600, pPos = new Float32Array(NP * 3), pVel = new Float32Array(NP * 3), pLife = new Float32Array(NP), pCol = new Float32Array(NP * 3);
+const pGeo = new THREE.BufferGeometry(); pGeo.setAttribute("position", new THREE.BufferAttribute(pPos, 3)); pGeo.setAttribute("color", new THREE.BufferAttribute(pCol, 3));
+const pts = new THREE.Points(pGeo, new THREE.PointsMaterial({ size: 0.035, vertexColors: true, transparent: true, opacity: 0.75, depthWrite: false }));
+pts.frustumCulled = false; scene.add(pts);
+let pNext = 0;
+const SURF_COL = { asphalt: [0.55, 0.55, 0.53], concrete: [0.78, 0.76, 0.72], grass: [0.45, 0.5, 0.3], water: [0.92, 0.97, 1.0] };
+function emit(dt, tel) {
+  if (!sim.ctl.lift || !tel.flow) return;
+  const rate = Math.min(500, tel.flow * (tel.surface === "water" ? 90 : tel.surface === "grass" ? 30 : 14));
+  let n = rate * dt; if (Math.random() < n % 1) n = Math.ceil(n); else n = Math.floor(n);
+  for (let k = 0; k < n; k++) {
+    const i = pNext; pNext = (pNext + 1) % NP;
+    const o = outline[Math.floor(Math.random() * outline.length)];
+    tmpV.set(o[0], -S.skirtDepth, -o[1]); board.localToWorld(tmpV);
+    const gy = W.ground(tmpV.x, -tmpV.z).h;
+    if (tmpV.y - gy > 0.25) continue;                                  // jet only interacts with the ground near it
+    const nrm = new THREE.Vector3(o[0], 0, -o[1]).normalize().applyQuaternion(board.quaternion);
+    const v = Math.min(tel.edgeV, 50) * 0.25 * (0.6 + Math.random() * 0.6);   // sheet slows within ~10 gap-widths; entrained dust moves slower
+    pPos[3 * i] = tmpV.x; pPos[3 * i + 1] = gy + 0.01; pPos[3 * i + 2] = tmpV.z;
+    pVel[3 * i] = nrm.x * v; pVel[3 * i + 1] = tel.surface === "water" ? 1.5 + Math.random() * 2 : 0.3 + Math.random() * 0.6; pVel[3 * i + 2] = nrm.z * v;
+    pLife[i] = tel.surface === "water" ? 0.9 : 0.6;
+    const col = SURF_COL[tel.surface] || SURF_COL.asphalt; pCol[3 * i] = col[0]; pCol[3 * i + 1] = col[1]; pCol[3 * i + 2] = col[2];
+  }
+}
+function stepParticles(dt) {
+  for (let i = 0; i < NP; i++) {
+    if (pLife[i] <= 0) { pPos[3 * i + 1] = -10; continue; }
+    pLife[i] -= dt;
+    const drag = Math.exp(-6 * dt);
+    pVel[3 * i] *= drag; pVel[3 * i + 2] *= drag; pVel[3 * i + 1] = pVel[3 * i + 1] * drag - 9.81 * dt;
+    pPos[3 * i] += pVel[3 * i] * dt; pPos[3 * i + 1] = Math.max(0.005, pPos[3 * i + 1] + pVel[3 * i + 1] * dt); pPos[3 * i + 2] += pVel[3 * i + 2] * dt;
+  }
+  pGeo.attributes.position.needsUpdate = true; pGeo.attributes.color.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------- input
+const joy = $("joy"), knob = $("knob");
+let stick = [0, 0], joyId = null;
+function joyMove(e) {
+  const r = joy.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  let dx = (e.clientX - cx) / (r.width / 2 - 20), dy = (e.clientY - cy) / (r.height / 2 - 20);
+  const m = Math.hypot(dx, dy); if (m > 1) { dx /= m; dy /= m; }
+  stick = [-dy, dx];
+  knob.style.transform = `translate(${dx * (r.width / 2 - 29)}px, ${dy * (r.height / 2 - 29)}px)`;
+}
+joy.addEventListener("pointerdown", (e) => { joyId = e.pointerId; joy.setPointerCapture(e.pointerId); joyMove(e); });
+joy.addEventListener("pointermove", (e) => { if (e.pointerId === joyId) joyMove(e); });
+const joyEnd = (e) => { if (e.pointerId !== joyId) return; joyId = null; stick = [0, 0]; knob.style.transform = ""; };
+joy.addEventListener("pointerup", joyEnd); joy.addEventListener("pointercancel", joyEnd);
+
+let toastT = 0;
+function toast(msg) { $("toast").textContent = msg; $("toast").style.opacity = 1; toastT = 2.5; }
+function setLift(on) {
+  sim.ctl.lift = on; $("bLift").classList.toggle("on", on);
+  $("bLift").querySelector("small").textContent = on ? "fans on" : "fans off";
+  if (!on) toast("Fans off: settling onto the skids");
+}
+$("bLift").addEventListener("click", () => {
+  if (sim.soc <= 0.001) { toast("Battery empty"); return; }
+  setLift(!sim.ctl.lift);
+});
+function setRider(on) {
+  const err = sim.setRider(on); if (err) { toast(err); return; }
+  $("bRider").classList.toggle("on", on); $("bRider").querySelector("small").textContent = on ? "step off" : "step on";
+  if (!on) {   // the rider steps off to the left side of the board
+    tmpV.set(0, 0, -0.95); board.localToWorld(tmpV); riderWorld.set(tmpV.x, W.ground(tmpV.x, -tmpV.z).h, tmpV.z);
+    riderOffQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), sim.telemetry.yaw || 0);
+  }
+}
+$("bRider").addEventListener("click", () => setRider(!sim.riderOn));
+const hopDown = (e) => { e.preventDefault(); if (!sim.ctl.lift) { toast("Turn LIFT on first"); return; } sim.ctl.hop = true; $("bHop").classList.add("on"); };
+const hopUp = () => { sim.ctl.hop = false; $("bHop").classList.remove("on"); };
+$("bHop").addEventListener("pointerdown", hopDown); $("bHop").addEventListener("pointerup", hopUp); $("bHop").addEventListener("pointercancel", hopUp); $("bHop").addEventListener("pointerleave", hopUp);
+// keyboard for desktop
+const keys = {};
+addEventListener("keydown", (e) => { keys[e.key.toLowerCase()] = true; if (e.key === " ") hopDown(e); if (e.key.toLowerCase() === "l") $("bLift").click(); if (e.key.toLowerCase() === "r") $("bRider").click(); });
+addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; if (e.key === " ") hopUp(); });
+
+// camera: chase / side / top, plus one-finger orbit and pinch zoom on the 3D view
+const CAMS = ["Chase cam", "Side cam", "Top cam"];
+let camMode = 0, orbit = 0, tilt = 0.32, dist = 4.2;
+$("cam").addEventListener("click", () => { camMode = (camMode + 1) % 3; $("cam").textContent = CAMS[camMode]; orbit = camMode === 1 ? Math.PI / 2 : 0; tilt = camMode === 2 ? 1.35 : 0.32; });
+const touches = new Map();
+renderer.domElement.addEventListener("pointerdown", (e) => { touches.set(e.pointerId, [e.clientX, e.clientY]); });
+renderer.domElement.addEventListener("pointermove", (e) => {
+  const prev = touches.get(e.pointerId); if (!prev) return;
+  if (touches.size === 1) { orbit -= (e.clientX - prev[0]) * 0.008; tilt = Math.max(0.05, Math.min(1.45, tilt + (e.clientY - prev[1]) * 0.005)); }
+  else if (touches.size === 2) {
+    const [a, b] = [...touches.entries()]; const other = a[0] === e.pointerId ? b[1] : a[1];
+    const d0 = Math.hypot(prev[0] - other[0], prev[1] - other[1]), d1 = Math.hypot(e.clientX - other[0], e.clientY - other[1]);
+    dist = Math.max(1.6, Math.min(14, dist * d0 / Math.max(d1, 1)));
+  }
+  touches.set(e.pointerId, [e.clientX, e.clientY]);
+});
+const tEnd = (e) => touches.delete(e.pointerId);
+renderer.domElement.addEventListener("pointerup", tEnd); renderer.domElement.addEventListener("pointercancel", tEnd);
+renderer.domElement.addEventListener("wheel", (e) => { e.preventDefault(); dist = Math.max(1.6, Math.min(14, dist * (1 + Math.sign(e.deltaY) * 0.1))); }, { passive: false });
+
+// settings sheet
+$("gear").addEventListener("click", () => { $("sheet").hidden = false; });
+$("close").addEventListener("click", () => { $("sheet").hidden = true; });
+document.querySelectorAll("#mode button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#mode button").forEach((x) => x.classList.toggle("on", x === b));
+  sim.ctl.holdGap = b.dataset.v === "hold";
+  if (!sim.ctl.holdGap) { sim.ctl.manualN = Math.max(...sim.fanN) || +$("fanF").value / 100; $("fanF").value = Math.round(sim.ctl.manualN * 100); $("fanFv").textContent = $("fanF").value + " %"; }
+}));
+let timeScale = 1;
+document.querySelectorAll("#tscale button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#tscale button").forEach((x) => x.classList.toggle("on", x === b)); timeScale = +b.dataset.v;
+}));
+$("gapT").addEventListener("input", (e) => { sim.ctl.gapTarget = e.target.value / 1000; $("gapTv").textContent = e.target.value + " mm"; });
+$("fanF").addEventListener("input", (e) => { sim.ctl.manualN = e.target.value / 100; $("fanFv").textContent = e.target.value + " %"; });
+$("hopH").addEventListener("input", (e) => { sim.ctl.hopHeight = +e.target.value; $("hopHv").textContent = (+e.target.value).toFixed(2) + " m"; });
+$("riderM").addEventListener("input", (e) => {
+  sim.riderMass = +e.target.value; sim.updateMass();
+  $("riderMv").textContent = `${Math.round(sim.riderMass * 2.20462)} lb`;
+});
+function teleport(x, y) { const rm = sim.riderMass; sim.reset(); sim.riderMass = rm; sim.updateMass(); sim.pos = [x, y, S.skidDepth + 0.02]; setLift(false); setRider(false); riderBlend = 0; }
+$("reset").addEventListener("click", () => { teleport(0, 0); $("sheet").hidden = true; });
+$("toDock").addEventListener("click", () => { teleport(10, 9.5); sim.q = [Math.cos(0), 0, 0, Math.sin(0)]; toast("Dock ahead: lift, step on, drive and hold HOP"); $("sheet").hidden = true; });
+$("toPond").addEventListener("click", () => { teleport(-12, 3); sim.q = [Math.cos(Math.PI / 4), 0, 0, Math.sin(Math.PI / 4)]; toast("Pond ahead: the cushion works on water too"); $("sheet").hidden = true; });
+$("go").addEventListener("click", () => { $("intro").remove(); });
+const cells = $("cells"); for (let i = 0; i < 6; i++) cells.appendChild(document.createElement("div"));
+
+// ---------------------------------------------------------------- loop: physics at 1 kHz in real time, render at display rate
+const DT = 0.001;
+let acc = 0, last = performance.now(), hudT = 0, tel = sim.step(DT);
+function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.fov = w < h ? 62 : 50; camera.updateProjectionMatrix(); }
+addEventListener("resize", resize); resize();
+const camPos = new THREE.Vector3(-4, 2, 0), camLook = new THREE.Vector3();
+
+function frame(now) {
+  let real = Math.min((now - last) / 1000, 0.1); last = now;
+  const kb = [(keys["w"] || keys["arrowup"] ? 1 : 0) - (keys["s"] || keys["arrowdown"] ? 1 : 0), (keys["d"] || keys["arrowright"] ? 1 : 0) - (keys["a"] || keys["arrowleft"] ? 1 : 0)];
+  sim.ctl.stick = kb[0] || kb[1] ? kb : stick;
+  acc += real * timeScale;
+  let n = 0;
+  while (acc >= DT && n < 200) { tel = sim.step(DT); acc -= DT; n++; }
+  const simDt = real * timeScale;
+
+  board.position.copy(T3(sim.pos)); board.quaternion.copy(Q3(sim.q)); board.updateMatrixWorld(true);
+  updateSkirt(Math.min(1, (sim.pAvg || 0) / 600));
+  // fans: show blades below ~12 rev/s, a translucent blur disc above (as eyes and cameras see them)
+  const fanRps = 3300 / 60;
+  fans.forEach((f, k) => { const rps = tel.fanN[k] * fanRps; f.hubSpin.rotation.y += rps * 2 * Math.PI * simDt; f.blur.material.opacity = Math.min(0.55, Math.max(0, (rps - 8) / 25)); f.hubSpin.visible = rps < 25; });
+  thr.forEach((f, k) => { const rps = Math.abs(sim.thrustN[k]) * 9000 / 60; f.spin.rotation.y += Math.sign(sim.thrustN[k]) * rps * 2 * Math.PI * simDt; f.blur.material.opacity = Math.min(0.5, Math.max(0, (rps - 8) / 30)); f.spin.visible = rps < 30; });
+  ledMat.color.set(sim.ctl.hop ? 0xffb648 : tel.powerLimited ? 0xff5a5f : sim.ctl.lift ? 0x3fd2ff : 0x2a3540);
+  // rider: blends between standing beside the board and riding it, in step with the physics mass transfer
+  riderBlend = sim.riderFrac;
+  const onPos = new THREE.Vector3(0.05, S.deckThick + 0.012, 0).applyMatrix4(board.matrixWorld);
+  rider.position.lerpVectors(riderWorld, onPos, riderBlend);
+  // riding: skateboard stance, feet along the deck, facing the board's left side; off: facing the board where you stepped off
+  const ridingQ = board.quaternion.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
+  rider.quaternion.slerp(riderBlend > 0.5 ? ridingQ : riderOffQ, 0.25);
+  const knee = 0.15 + 0.25 * riderBlend + (sim.ctl.hop ? 0.15 : 0);
+  legL.rotation.x = -knee * 0.6; legR.rotation.x = -knee * 0.6; shinL.rotation.x = knee * 1.2; shinR.rotation.x = knee * 1.2;
+  body.position.y = -0.06 * knee; armL.rotation.z = 0.25 + 0.35 * riderBlend; armR.rotation.z = -0.25 - 0.35 * riderBlend;
+  body.rotation.x = -0.12 * sim.ctl.stick[0] * riderBlend;
+  if (mixer) {
+    // walk clip while the weight is transferring (stepping on/off), idle otherwise; riding pose layered on top
+    const stepping = sim.riderFrac > 0.02 && sim.riderFrac < 0.98;
+    walkW += ((stepping ? 1 : 0) - walkW) * Math.min(1, real * 8);
+    acts.Walk.setEffectiveWeight(walkW); acts.Idle.setEffectiveWeight(1 - walkW);
+    mixer.update(simDt);
+    const ride = Math.max(0, (sim.riderFrac - 0.5) * 2);       // pose blends in over the second half of the step
+    const crouch = ride * (0.5 + (sim.ctl.hop ? 0.35 : 0) + 0.1 * Math.abs(sim.ctl.stick[1]));
+    ridePose(crouch, ride);
+    // lean toward the nose when accelerating (nose is on the rider's right: lean = rotation about -z), back when braking
+    bend("mixamorigSpine", AZ, -0.18 * sim.ctl.stick[0] * ride);
+  }
+
+  emit(simDt, tel); stepParticles(simDt);
+  waterNormal.offset.x += simDt * 0.02; waterNormal.offset.y += simDt * 0.013;
+
+  // camera
+  const yaw = tel.yaw ?? 0, target = board.position.clone().add(new THREE.Vector3(0, 0.5, 0));
+  const a = yaw + Math.PI + orbit;
+  const want = new THREE.Vector3(target.x + dist * Math.cos(tilt) * Math.cos(a), target.y + dist * Math.sin(tilt), target.z - dist * Math.cos(tilt) * Math.sin(a));
+  camPos.lerp(want, 1 - Math.exp(-real * 6)); camLook.lerp(target, 1 - Math.exp(-real * 10));
+  camera.position.copy(camPos); camera.lookAt(camLook);
+  sun.position.set(board.position.x + 8, 14, board.position.z + 5); sun.target.position.copy(board.position);
+  renderer.render(scene, camera);
+
+  hudT -= real; toastT -= real;
+  if (toastT <= 0) $("toast").style.opacity = 0;
+  if (hudT <= 0) { hudT = 0.1; hud(); }
+  requestAnimationFrame(frame);
+}
+
+function hud() {
+  const soc = Math.max(0, tel.soc * 100);
+  $("soc").textContent = soc.toFixed(1);
+  const bar = $("socbar"); bar.style.width = soc + "%";
+  bar.style.background = soc > 40 ? "linear-gradient(90deg,#48e08f,#9cf06a)" : soc > 15 ? "linear-gradient(90deg,#ffb648,#ffd27a)" : "linear-gradient(90deg,#ff5a5f,#ff8a7a)";
+  $("volts").textContent = tel.volts.toFixed(1); $("amps").textContent = tel.amps.toFixed(0);
+  $("wh").textContent = tel.energyWh.toFixed(1);
+  $("remain").textContent = tel.totalKW > 0.2 ? `${tel.remainingMin > 600 ? ">600" : tel.remainingMin.toFixed(0)} min at this power` : "idle";
+  $("burst").textContent = tel.amps > S.battery.cellCont * S.battery.parallel ? `burst ${tel.burstLeft.toFixed(1)} s left` : "";
+  $("kw").textContent = tel.totalKW.toFixed(1); $("kwl").textContent = tel.liftKW.toFixed(1); $("kwt").textContent = tel.thrustKW.toFixed(1);
+  const pMax = 80;
+  $("pl").style.width = Math.min(100, tel.liftKW / pMax * 100) + "%"; $("pt").style.width = Math.min(100, tel.thrustKW / pMax * 100) + "%";
+  $("ride").textContent = (tel.rideHeight * 100).toFixed(1);
+  $("gap").textContent = sim.ctl.lift || tel.meanGap > 0 ? Math.max(tel.meanGap * 1000, -99).toFixed(0) : "—";
+  $("spd").textContent = (tel.speed * 3.6).toFixed(1);
+  $("mass").textContent = tel.mass.toFixed(0);
+  const chips = [];
+  chips.push([tel.surface, ""]);
+  chips.push([sim.ctl.hop ? "HOP" : !sim.ctl.lift ? (tel.rideHeight < S.skidDepth + 0.02 ? "landed" : "settling") : tel.meanGap > 0.1 ? "airborne" : "on cushion", sim.ctl.hop ? "warn" : sim.ctl.lift ? "on" : ""]);
+  chips.push([`cushion ${Math.round(tel.pressures.reduce((a, b) => a + b, 0) / 6)} Pa`, ""]);
+  if (sim.ctl.lift) {
+    // on the cushion the jet is a thin sheet at the skirt hem; airborne it is a downward column through the open skirt
+    const vDown = Math.sqrt(tel.weight / (1.225 * S.L * S.W));
+    chips.push([tel.meanGap > 0.1 ? `downwash ${vDown.toFixed(0)} m/s` : `edge jet ${tel.edgeV.toFixed(0)} m/s`, ""]);
+  }
+  chips.push([sim.ctl.holdGap ? "gap hold" : `fans fixed ${Math.round(sim.ctl.manualN * 100)}%`, ""]);
+  if (tel.powerLimited) chips.push(["POWER LIMITED", "bad"]);
+  if (timeScale !== 1) chips.push(["SLOW ¼×", "warn"]);
+  $("chips").innerHTML = chips.map(([t, c]) => `<span class="chip ${c}">${t}</span>`).join("");
+  // compartment gaps (rows: left / right side; columns: rear, middle, front)
+  const order = [0, 2, 4, 1, 3, 5];          // compartments: index = 2*i + j, i = rear..front, j = left/right
+  [...cells.children].forEach((el, k) => {
+    const g = tel.gaps[order[k]] * 1000, t = Math.max(0, Math.min(1, g / 40));
+    el.textContent = sim.ctl.lift ? `${g.toFixed(0)} mm` : "—";
+    el.style.background = g < 1 ? "#ff5a5f" : `hsl(${190 - 150 * (1 - t)}, 80%, ${55 + 10 * t}%)`;
+  });
+}
+requestAnimationFrame(frame);
+})();
+</script>

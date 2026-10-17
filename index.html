@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Levitate</title>
+<style>
+  :root { --bg:#0b0f14; --card:#141b23; --ink:#e8edf2; --muted:#93a1b0; --accent:#46d2ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:880px; margin:0 auto; padding:32px 16px 48px; }
+  h1 { font-size:2rem; margin:0 0 4px; letter-spacing:.02em; }
+  p.lead { color:var(--muted); margin:0 0 28px; }
+  .grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); }
+  a.card { display:block; background:var(--card); border-radius:14px; overflow:hidden; color:inherit; text-decoration:none; border:1px solid #223040; }
+  a.card:hover { border-color:var(--accent); }
+  a.card img { width:100%; aspect-ratio:16/10; object-fit:cover; display:block; }
+  a.card div { padding:14px 16px 16px; }
+  a.card h2 { margin:0 0 4px; font-size:1.15rem; }
+  a.card span { color:var(--muted); font-size:.92rem; }
+  footer { margin-top:32px; color:var(--muted); font-size:.9rem; }
+  footer a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Project Levitate</h1>
+  <p class="lead">Physics-first hoverboard research, from a 100&nbsp;mm desk toy to a board that carries a 200&nbsp;lb rider. Every motion is integrated from forces; nothing is scripted. Simulation only, nothing here is measured yet.</p>
+  <div class="grid">
+    <a class="card" href="hoverboard/"><img src="img/hoverboard_sim.jpg" alt="LV-H1 air-cushion hoverboard with rider"><div><h2>LV-H1 air-cushion hoverboard</h2><span>Ride it, step on and off, hop, and watch the 5.4&nbsp;kWh battery drain in real time.</span></div></a>
+    <a class="card" href="propulsion/"><img src="img/propulsion_skateboard.jpg" alt="Cold-gas boosted skateboard"><div><h2>Propulsion lab</h2><span>Cold-gas boosted skateboard, cold-gas hoverboard and a theoretical rocket hoverboard.</span></div></a>
+  </div>
+  <footer>Code, figures and findings: <a href="https://github.com/KyleSau/project-levitate">github.com/KyleSau/project-levitate</a> &middot; Companion: <a href="https://kylesau.github.io/project-aether/">Project Aether rocket launch sim</a></footer>
+</main>
+</body>
+</html>
