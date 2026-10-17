@@ -18,7 +18,7 @@ class Design(BaseModel):
     name: str = "baseline"
     # envelope
     length_mm: float = Field(100.0, ge=40, le=200)
-    width_mm: float = Field(32.0, ge=15, le=80)
+    width_mm: float = Field(32.0, ge=15, le=120)
     board_height_mm: float = Field(9.0, ge=3, le=30, description="total deck thickness = duct height")
     skin_mm: float = Field(0.8, ge=0.3, le=3)
     wall_mm: float = Field(0.7, ge=0.3, le=3)

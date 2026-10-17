@@ -1,0 +1,8 @@
+fastapi==0.143.3
+httpx==0.28.1
+numpy==2.5.4
+optuna==5.0.0
+pydantic==2.14.1
+pytest==9.1.1
+scipy==1.18.1
+uvicorn==0.54.0
