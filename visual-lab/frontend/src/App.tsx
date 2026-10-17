@@ -113,16 +113,16 @@ export default function App() {
     const tr = res.trajectory;
     const h0 = res.vehicle.cg_m[2] + res.vehicle.height_m / 2;
     return {
-      alt: [{ name: "altitude", color: "#35d0ba", data: tr.pos.map((p) => p[2] - h0) },
-        { name: "setpoint", color: "#ffffff", data: tr.ref_pos.map((p) => p[2] - h0), dashed: true }],
-      vel: [{ name: "vx", color: "#ff5c5c", data: tr.vel.map((v) => v[0]) }, { name: "vy", color: "#5cff8a", data: tr.vel.map((v) => v[1]) },
-        { name: "vz", color: "#5ca8ff", data: tr.vel.map((v) => v[2]) }],
-      force: [{ name: "lift", color: res.vehicle.hypothetical ? "#d36cff" : "#4fa3ff", data: tr.F_act.map((f) => f[2]) },
-        { name: "weight", color: "#ff5c7a", data: tr.F_grav.map((f) => -f[2]), dashed: true },
-        { name: "contact", color: "#ffb000", data: tr.F_contact.map((f) => f[2]) }],
-      att: [{ name: "roll", color: "#ff5c5c", data: tr.euler_deg.map((e) => e[0]) }, { name: "pitch", color: "#5cff8a", data: tr.euler_deg.map((e) => e[1]) },
-        { name: "yaw", color: "#5ca8ff", data: tr.euler_deg.map((e) => e[2]) }],
-      power: [{ name: "P (est.)", color: "#f5a524", data: tr.power_w }],
+      alt: [{ name: "altitude", color: "#3987e5", data: tr.pos.map((p) => p[2] - h0) },
+        { name: "setpoint", color: "#9aa7b4", data: tr.ref_pos.map((p) => p[2] - h0), dashed: true }],
+      vel: [{ name: "vx", color: "#3987e5", data: tr.vel.map((v) => v[0]) }, { name: "vy", color: "#d95926", data: tr.vel.map((v) => v[1]) },
+        { name: "vz", color: "#199e70", data: tr.vel.map((v) => v[2]) }],
+      force: [{ name: "lift", color: "#3987e5", data: tr.F_act.map((f) => f[2]) },
+        { name: "weight", color: "#d95926", data: tr.F_grav.map((f) => -f[2]), dashed: true },
+        { name: "contact", color: "#199e70", data: tr.F_contact.map((f) => f[2]) }],
+      att: [{ name: "roll", color: "#3987e5", data: tr.euler_deg.map((e) => e[0]) }, { name: "pitch", color: "#d95926", data: tr.euler_deg.map((e) => e[1]) },
+        { name: "yaw", color: "#199e70", data: tr.euler_deg.map((e) => e[2]) }],
+      power: [{ name: "P (est.)", color: "#3987e5", data: tr.power_w }],
     };
   }, [res]);
 

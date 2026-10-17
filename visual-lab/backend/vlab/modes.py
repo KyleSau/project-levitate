@@ -56,6 +56,7 @@ class BatteryConstraint(Toggle):
     max_continuous_c: float = 20.0
     usable_fraction: float = 0.80
     include_mass: bool = True
+    max_power_override_w: float | None = None   # e.g. imported from Agent A's power_model
 
 
 class ConversionLosses(Toggle):
@@ -212,8 +213,18 @@ def power_fn(mc: ModeConfig, v: VehicleConfig, rho: float) -> PowerFn:
     av = v.power.avionics_w
     if mc.propulsion == "ionic_wind":
         tpp = v.power.ionic_thrust_per_power_n_per_w
+        src = "assumption"
+        import json
+        from .util import DATA
+        p = DATA / "rom" / "harness_ehd_latest.json"
+        if p.exists():
+            d = json.loads(p.read_text())
+            if d.get("valid") and d.get("summary", {}).get("thrust_to_power_n_per_kw"):
+                tpp = d["summary"]["thrust_to_power_n_per_kw"] / 1000
+                src = (f"Agent A corona solver ({d['params']['voltage_kv']} kV, gap {d['params']['gap_mm']} mm; "
+                       "single wire 2-D, excludes collector drag / array shielding)")
         return PowerFn(kind="ionic", c=1 / (tpp * esc), avionics_w=av,
-                       model=f"ESTIMATE: EAD P = T/(thrust_per_power {tpp*1000:.1f} N/kW x eta_conv {esc:.2f})")
+                       model=f"ESTIMATE: EAD P = T/(thrust_per_power {tpp*1000:.2f} N/kW [{src}] x eta_conv {esc:.2f})")
     return PowerFn(kind="rotor", c=kd / (fm * eta * esc * math.sqrt(2 * rho * area)), avionics_w=av,
                    model=f"ESTIMATE: momentum theory P = T^1.5 k_duct/(FM eta_m eta_esc sqrt(2 rho A)); FM={fm}, "
                          f"eta_m={eta}, eta_esc={esc}, k_duct={kd:.3f}, A={area*1e6:.0f} mm^2, rho={rho:.4f}")
@@ -221,6 +232,8 @@ def power_fn(mc: ModeConfig, v: VehicleConfig, rho: float) -> PowerFn:
 
 def battery_max_power(b: BatteryConstraint) -> float:
     """Agent A battery.py max_deliverable_power: lower of C-rate and voltage-cutoff current limits."""
+    if b.max_power_override_w is not None:
+        return b.max_power_override_w
     voc = V_OC_PER_CELL * b.cells
     i_c = b.max_continuous_c * b.capacity_mah / 1000
     i_v = (voc - V_MIN_PER_CELL * b.cells) / b.internal_resistance_ohm if b.internal_resistance_ohm > 0 else math.inf
@@ -322,9 +335,9 @@ def resolve(vehicle: VehicleConfig, mc: ModeConfig) -> ResolvedModel:
                              power_cap_w=math.inf, energy_j=math.inf, battery=None, ground_effect=False,
                              thermal=None, torque_limit=None, labels=labels, hypothetical=True)
 
-    f_max = [math.inf] * n
+    f_max = [a.max_force_n for a in v.actuators]          # per-actuator rating (inf for the default board)
     if mc.thrust_limit.enabled:
-        f_max = [mc.thrust_limit.max_force_per_actuator_n] * n
+        f_max = [min(f, mc.thrust_limit.max_force_per_actuator_n) for f in f_max]
     cap = math.inf
     if mc.power_limit.enabled:
         cap = min(cap, mc.power_limit.max_electrical_power_w)

@@ -229,8 +229,8 @@ def set_cg(v: VehicleConfig, cg_m: Vec3) -> VehicleConfig:
     Raises ValueError if that would put the component outside the deck envelope."""
     out = v.model_copy(deep=True)
     if out.inertia_override_kgm2 is not None:
-        out.cg_override_m = tuple(cg_m)
-        return out
+        raise ValueError("imported rigid body: its inertia is given about its own CG; moving the CG without a mass "
+                         "distribution would violate consistency - edit the source design instead")
     trims = [c for c in out.components if c.cg_trim]
     if not trims:
         raise ValueError("vehicle has no CG-trim component")

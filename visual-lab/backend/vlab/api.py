@@ -81,3 +81,6 @@ def analyse_ep(req: SimRequest):
         return J(analyse_request(req))
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+
+from . import routes  # noqa: E402,F401  (registers the remaining endpoints)
