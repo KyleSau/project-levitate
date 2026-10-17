@@ -31,6 +31,21 @@ for (const name of ["skate_default", "skate_surprised_rider", "skate_ideal_adiab
   check(`${name}: ledger equals Python`, Math.abs(js.ledger.jet_ke - pyL.jet_ke) <= 1e-6 * Math.max(1, pyL.jet_ke) && Math.abs(js.ledger.drag - pyL.drag) <= 1e-6 * Math.max(1, pyL.drag));
 }
 
+console.log("Python parity (hoverboards, 6-DOF)");
+for (const name of ["hover_coldgas", "hover_rocket", "hover_rocket_biprop"]) {
+  const r = ref(name), sim = new P.HoverSim(r.config);
+  check(`${name}: same design thrust`, Math.abs(sim.F_design - r.F_design) / r.F_design < 1e-9, `${sim.F_design.toFixed(3)} N`);
+  const js = sim.run(r.t_end, r.record_every), py = r.trace;
+  check(`${name}: same sample count`, js.t.length === py.t.length, `${js.t.length} vs ${py.t.length}`);
+  const comp = (k, i) => js[k].map((v) => v[i]), compP = (k, i) => py[k].map((v) => v[i]);
+  for (const [k, i, floor] of [["pos", 0, 1], ["pos", 2, 1], ["q", 0, 1], ["q", 3, 1], ["vel", 2, 1], ["F", 0, 100], ["cg", 2, 0.1]]) {
+    const e = maxRel(comp(k, i), compP(k, i), floor);
+    check(`${name}: ${k}[${i}] matches Python`, e < 1e-6, `max rel err ${e.toExponential(2)}`);
+  }
+  check(`${name}: propellant matches Python`, maxRel(js.prop, py.prop, 0.1) < 1e-6);
+  check(`${name}: same events`, JSON.stringify(js.events.map((e) => e[1])) === JSON.stringify(py.events.map((e) => e[1])), js.events.map((e) => e[1]).join(", "));
+}
+
 // ------------------------------------------------------------------ 2. physics on the JS model
 console.log("Physics checks (JS)");
 { // no free energy: jet KE never exceeds the exergy drawn from the tank; boost cannot add more KE+losses than the jet gives
@@ -80,6 +95,24 @@ console.log("Physics checks (JS)");
   for (let i = 0; i < 10000; i++) sim.step(0.001);
   const ve = 10 / (1 + k * 10 * 10);
   check("drag-only decay = v0/(1+k v0 t)", Math.abs(sim.v - ve) / ve < 1e-3, `${sim.v.toFixed(4)} vs ${ve.toFixed(4)} m/s`);
+}
+
+{ // 6-DOF free fall: no thrust, no drag -> z(t) = z0 - g t^2 / 2
+  const sim = new P.HoverSim({ propulsion: "rocket", drag: false, start_height_m: 20 });
+  sim.phase = "done"; const z0 = sim.pos[2];
+  for (let i = 0; i < 1500; i++) sim.step(0.001);
+  const ze = z0 - 0.5 * P.G0 * 1.5 * 1.5;
+  check("6-DOF free fall z0 - g t^2/2", Math.abs(sim.pos[2] - ze) < 0.02, `${sim.pos[2].toFixed(4)} vs ${ze.toFixed(4)} m (Euler O(dt))`);
+}
+{ // 6-DOF rocket equation: gravity 0, no drag, no cant, full thrust -> dv = Isp g0 ln(m0/m1)
+  const sim = new P.HoverSim({ propulsion: "rocket", gravity: 0, drag: false, cant_deg: 0, start_height_m: 5, reserve_s: 0, tank_x_m: 0 });
+  sim._control = () => [[1, 1, 1, 1], true];   // open loop, full throttle
+  const m0 = sim.massProps()[0];
+  let dvIdeal = 0;
+  for (let i = 0; i < 3000; i++) { const m = sim.massProps()[0]; sim.step(0.001); dvIdeal += (sim.tel.F[0] + sim.tel.F[1] + sim.tel.F[2] + sim.tel.F[3]) / m * 0.001; }
+  const m1 = sim.massProps()[0], ex = sim.rules.isp_s * P.G0 * Math.log(m0 / m1), v = Math.hypot(...sim.tel.vel);
+  check("6-DOF variable mass: integral(F/m dt) = Isp g0 ln(m0/m1)", Math.abs(dvIdeal - ex) / ex < 1e-3, `${dvIdeal.toFixed(3)} vs ${ex.toFixed(3)} m/s`);
+  check("6-DOF open loop: |v| <= rocket-equation delta-v (off-axis CG turns the thrust)", v <= ex * 1.0001 && v > 0.95 * ex, `${v.toFixed(3)} m/s`);
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

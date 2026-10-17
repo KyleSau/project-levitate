@@ -140,3 +140,35 @@ def test_harder_braking_noses_over():
     sc[-1] = (17.0, Controls(brake=0.6))
     r = evaluate_skateboard(SkateConfig(), sc)
     assert r.flags["noseover"] or r.flags["rider_fell"]
+
+
+def test_fixed_step_boost_matches_solve_ivp_reference():
+    """Browser-style fixed-step integration vs SciPy LSODA on the same continuous equations (rigid rider)."""
+    import numpy as np
+    from scipy.integrate import solve_ivp
+
+    cfg = SkateConfig(electric=False, boost_ramp_s=0.0, overrides={"rider_heel_lever_m": 5.0, "rider_toe_lever_m": 5.0})
+    sim = SkateSim(cfg)
+    rec = sim.run([(0.0, Controls(boost=True))], 8.0, record_every=1000)
+    ref_sim = SkateSim(cfg)
+    gs = ref_sim.gas_sys
+    gs.reset()
+    m_fixed = ref_sim.mass_props()[0] - gs.m
+    vs = ref_sim.v_sk
+
+    def f(t, y):
+        x, v, m, U, Tw = y
+        st = gs.thrust_state(1.0, m, U)
+        mdot = st["mdot"] if st["valid"] else 0.0
+        T = st["thrust"] if st["valid"] else 0.0
+        M = m_fixed + m
+        D = 0.5 * RHO_AIR_SL * vs["cda_upright"] * v * abs(v)
+        R = vs["crr"] * M * G0 if v > 1e-6 else 0.0
+        dm, dU, dTw = gs.rhs(m, U, Tw, mdot)
+        return [v, max((T - D - R) / M, 0.0) if v <= 1e-6 else (T - D - R) / M, dm, dU, dTw]
+
+    sol = solve_ivp(f, (0, 8.0), [0.0, 0.0, gs.m, gs.U, gs.Tw], method="LSODA", rtol=1e-9, atol=1e-9, dense_output=True)
+    t = np.array(rec["t"])
+    v_ref = sol.sol(t)[1]
+    assert np.max(np.abs(np.array(rec["v"]) - v_ref)) < 5e-3 * max(v_ref)
+    assert np.max(np.abs(np.array(rec["x"]) - sol.sol(t)[0])) < 2e-3 * max(sol.sol(t)[0])

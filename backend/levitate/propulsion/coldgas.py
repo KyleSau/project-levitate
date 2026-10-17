@@ -322,6 +322,35 @@ class ColdGasSystem:
         st["mdot_used"] = mdot
         return st
 
+    def step_multi(self, dt: float, throttles: list[float]) -> dict:
+        """Individually throttled thrusters on one tank/regulator (hover boards). Z is evaluated once, at the
+        full-throttle feed pressure, and used for every thruster (feeds are <= the regulator pressure)."""
+        p, T, rho, ok = self.state()
+        pmax = self.feed(p, 1.0)
+        Z = self.tab.prop("Z", T, self.tab.rho_from_pT(max(pmax, 2e4), T)) if (self.tab and pmax > 2e5) else 1.0
+        F, md, ue, Te = [], [], 0.0, T
+        for u in throttles:
+            nz = nozzle(self.feed(p, u), T, self.gas, self.thr.throat_area, self.thr.expansion_ratio, self.thr.ambient_pa,
+                        self.vals["nozzle_cd"], self.vals["nozzle_cf_eff"], Z, self.pe_ratio)
+            F.append(nz.thrust if ok else 0.0)
+            md.append(nz.mdot if ok else 0.0)
+            if nz.mdot > 0:
+                ue, Te = nz.ue, nz.Te
+        mdot = sum(md)
+        if mdot > self.m / dt:
+            k = (self.m / dt) / mdot
+            F = [f * k for f in F]
+            md = [x * k for x in md]
+            mdot = self.m / dt
+        dm, dU, dTw = self.rhs(self.m, self.U, self.Tw, mdot)
+        self.m += dm * dt
+        self.U += dU * dt
+        self.Tw += dTw * dt
+        if self.tank.thermal == "isothermal":
+            self.U = self.m * self.u(self.T0, self.m / self.V)
+        return {"F": F, "mdot": md, "mdot_total": mdot, "p_tank": p, "T_tank": T, "ue": ue, "Te": Te, "valid": ok,
+                "pmax": pmax}
+
     # ---- reference integration
     def blowdown_ivp(self, throttle: float = 1.0, t_end: float = 600.0, thrust_cutoff_frac: float = 0.02,
                      rtol: float = 1e-8, n_out: int = 400):

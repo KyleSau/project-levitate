@@ -191,6 +191,22 @@
       st.mdot_used = mdot;
       return st;
     }
+    stepMulti(dt, throttles) {
+      const [p, T, , ok] = this.state(), pmax = this.feed(p, 1.0);
+      const Z = (this.tab && pmax > 2e5) ? this.tab.prop("Z", T, this.tab.rho_from_pT(Math.max(pmax, 2e4), T)) : 1.0;
+      let F = [], md = [], ue = 0, Te = T;
+      for (const u of throttles) {
+        const nz = nozzle(this.feed(p, u), T, this.gas, this.At, this.thr.expansion_ratio, this.thr.ambient_pa, this.vals.nozzle_cd, this.vals.nozzle_cf_eff, Z, this.peRatio);
+        F.push(ok ? nz.thrust : 0); md.push(ok ? nz.mdot : 0);
+        if (nz.mdot > 0) { ue = nz.ue; Te = nz.Te; }
+      }
+      let mdot = md.reduce((a, b) => a + b, 0);
+      if (mdot > this.m / dt) { const k = (this.m / dt) / mdot; F = F.map((f) => f * k); md = md.map((x) => x * k); mdot = this.m / dt; }
+      const [dm, dU, dTw] = this.rhs(this.m, this.U, this.Tw, mdot);
+      this.m += dm * dt; this.U += dU * dt; this.Tw += dTw * dt;
+      if (this.tank.thermal === "isothermal") this.U = this.m * this.u(this.T0, this.m / this.V);
+      return { F, mdot: md, mdot_total: mdot, p_tank: p, T_tank: T, ue, Te, valid: ok, pmax };
+    }
     exergy() {
       if (!this.tab) { const [p, T] = this.state(); return this.m * idealClosedExergy(this.gas, Math.max(p, 1.2e5), T); }
       const [p, T] = this.state();
@@ -431,8 +447,329 @@
   }
   const defaultSkateScenario = (boost = true) => [[0, { throttle: 1 }], [3, { throttle: 1, boost }], [13, { throttle: 0 }], [17, { brake: 0.3 }]];
 
+  // ---------------------------------------------------------------------------------------- rocket black box
+  function engineRules(ec, v = A.rocket) {
+    let r;
+    if (ec.engine_class === "monoprop") r = { isp_s: v.isp_mono, min_throttle: v.min_throttle_mono, can_stop: true, max_starts: 1000, start_delay_s: 0.5 * v.start_delay_s, exit_temp_k: v.texit_mono, profile: "throttle" };
+    else if (ec.engine_class === "biprop") r = { isp_s: v.isp_biprop, min_throttle: v.min_throttle_biprop, can_stop: true, max_starts: 1 + Math.round(v.biprop_restarts), start_delay_s: v.start_delay_s, exit_temp_k: v.texit_biprop, profile: "throttle" };
+    else r = { isp_s: v.isp_solid, min_throttle: 1.0, can_stop: false, max_starts: 1, start_delay_s: 0.2, exit_temp_k: v.texit_solid, profile: "fixed" };
+    if (ec.isp_override_s) r.isp_s = ec.isp_override_s;
+    if (ec.min_throttle_override !== null && ec.min_throttle_override !== undefined && ec.engine_class !== "solid") r.min_throttle = ec.min_throttle_override;
+    return r;
+  }
+  class RocketEngine {
+    constructor(ec, rules) { this.cfg = ec; this.r = rules; this.F = ec.thrust_per_engine_n; this.reset(); }
+    reset() { this.running = false; this.starts = 0; this.t_since_start = 0; this.level = 0; this.burned_out = false; this._u = 1.0; }
+    command(u) {
+      if (u > 0 && !this.running && !this.burned_out && this.starts < this.r.max_starts) { this.running = true; this.starts++; this.t_since_start = 0; }
+      else if (u <= 0 && this.running && this.r.can_stop) this.running = false;
+      this._u = u;
+    }
+    step(dt, available) {
+      if (this.running && !available) { this.running = false; this.burned_out = true; }
+      if (!this.running) { this.level = 0; return [0, 0]; }
+      this.t_since_start += dt;
+      const ramp = Math.min(1, this.t_since_start / Math.max(this.r.start_delay_s, 1e-6));
+      const target = this.r.profile === "fixed" ? 1.0 : Math.min(Math.max(this._u, this.r.min_throttle), 1.0);
+      this.level = ramp * target;
+      const T = this.level * this.F;
+      return [T, T / (this.r.isp_s * G0)];
+    }
+  }
+  const engineMass = (ec, v = A.rocket) => ({ engines: ec.n_engines * ec.thrust_per_engine_n / (v.engine_tw * G0), tankage: v.tankage_fraction * ec.propellant_kg, propellant: ec.propellant_kg });
+
+  // ---------------------------------------------------------------------------------------- 6-DOF hoverboards
+  const qmul = (a, b) => [a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3], a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+    a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1], a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]];
+  const rot = (q, v) => { const [w, x, y, z] = q; return [
+    (1 - 2 * (y * y + z * z)) * v[0] + 2 * (x * y - w * z) * v[1] + 2 * (x * z + w * y) * v[2],
+    2 * (x * y + w * z) * v[0] + (1 - 2 * (x * x + z * z)) * v[1] + 2 * (y * z - w * x) * v[2],
+    2 * (x * z - w * y) * v[0] + 2 * (y * z + w * x) * v[1] + (1 - 2 * (x * x + y * y)) * v[2]]; };
+  const rotT = (q, v) => rot([q[0], -q[1], -q[2], -q[3]], v);
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const vadd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+  const vsub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const vscl = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+  const vdot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const vnorm = (a) => Math.sqrt(vdot(a, a));
+  function solve(M, b) {   // Gaussian elimination with partial pivoting, same as hover.solve in Python
+    const n = b.length, Aa = M.map((row, i) => row.concat([b[i]]));
+    for (let k = 0; k < n; k++) {
+      let piv = k; for (let i = k; i < n; i++) if (Math.abs(Aa[i][k]) > Math.abs(Aa[piv][k])) piv = i;
+      const tmp = Aa[k]; Aa[k] = Aa[piv]; Aa[piv] = tmp;
+      for (let i = k + 1; i < n; i++) { const f = Aa[i][k] / Aa[k][k]; for (let j = k; j <= n; j++) Aa[i][j] -= f * Aa[k][j]; }
+    }
+    const x = new Array(n).fill(0);
+    for (let i = n - 1; i >= 0; i--) { let s = 0; for (let j = i + 1; j < n; j++) s += Aa[i][j] * x[j]; x[i] = (Aa[i][n] - s) / Aa[i][i]; }
+    return x;
+  }
+  function quatFromEuler(yaw, pitch, roll) {
+    const cy = Math.cos(yaw / 2), sy = Math.sin(yaw / 2), cp = Math.cos(pitch / 2), sp = Math.sin(pitch / 2), cr = Math.cos(roll / 2), sr = Math.sin(roll / 2);
+    return [cr * cp * cy + sr * sp * sy, sr * cp * cy - cr * sp * sy, cr * sp * cy + sr * cp * sy, cr * cp * sy - sr * sp * cy];
+  }
+  const MISSION_DEFAULT = { hover_height_m: 0.6, translate_m: 2.0, yaw_deg: 90.0, hold_s: 1.0, speed_m_s: 1.0, climb_m_s: 0.6, descent_m_s: 0.4, yaw_rate_deg_s: 45.0 };
+  const HOVER_DEFAULT = {
+    propulsion: "coldgas", rider_kg: 90.72, rider_height_m: 1.75, deck_length_m: 1.0, deck_width_m: 0.5, leg_height_m: 0.30,
+    thruster_x_m: 0.42, thruster_y_m: 0.20, thruster_z_m: -0.05, cant_deg: 10.0, tw_design: null,
+    tank: Object.assign({}, DEFAULT_TANK, { volume_l: 9.0, n_tanks: 4, pressure_bar: 300, tank_class: "type3" }),
+    reg_pressure_bar: 40.0, expansion_ratio: 3.0, tank_x_m: 0.08, tank_z_m: -0.13,
+    engine: { engine_class: "monoprop", n_engines: 4, thrust_per_engine_n: 600.0, propellant_kg: 30.0, isp_override_s: null, min_throttle_override: null },
+    auto_thrust: true, mission: Object.assign({}, MISSION_DEFAULT), reserve_s: 1.5, gravity: G0, drag: true, start_height_m: null, dt: 0.001, overrides: null,
+  };
+  const FLYING = ["climb", "hover", "translate", "stop", "yaw", "hold"];
+
+  class HoverSim {
+    constructor(cfg = {}) {
+      const c = Object.assign({}, HOVER_DEFAULT, cfg);
+      c.tank = Object.assign({}, HOVER_DEFAULT.tank, cfg.tank || {});
+      c.engine = Object.assign({}, HOVER_DEFAULT.engine, cfg.engine || {});
+      c.mission = Object.assign({}, MISSION_DEFAULT, cfg.mission || {});
+      this.cfg = c;
+      const ov = c.overrides || {};
+      this.vh = Object.assign({}, A.hover); this.vc = Object.assign({}, A.coldgas); this.vr = Object.assign({}, A.rocket);
+      for (const k in ov) { if (k in this.vh) this.vh[k] = ov[k]; if (k in this.vc) this.vc[k] = ov[k]; if (k in this.vr) this.vr[k] = ov[k]; }
+      this.cda = c.drag ? (ov.hover_cda !== undefined ? ov.hover_cda : 0.8) : 0;
+      this.tw = c.tw_design !== null && c.tw_design !== undefined ? c.tw_design : this.vh.tw_margin;
+      const d = c.cant_deg * Math.PI / 180, X = c.thruster_x_m, Y = c.thruster_y_m, Z = c.thruster_z_m;
+      this.r_thr = [[X, Y, Z], [-X, Y, Z], [-X, -Y, Z], [X, -Y, Z]];
+      const spins = [1, -1, 1, -1];
+      this.d_thr = this.r_thr.map(([x, y], i) => { const r = Math.hypot(x, y), t = [-y / r, x / r, 0]; return [spins[i] * Math.sin(d) * t[0], spins[i] * Math.sin(d) * t[1], Math.cos(d)]; });
+      this._size(); this.reset();
+    }
+    _fixedParts() {
+      const c = this.cfg, v = this.vh, L = c.deck_length_m, W = c.deck_width_m;
+      const parts = [["deck + structure", v.board_struct_kg, [0, 0, 0], [L, W, 0.05]], ["avionics", v.avionics_kg, [-0.15, 0, 0.03], [0.2, 0.15, 0.05]]];
+      if (c.rider_kg > 0) parts.push(["rider", c.rider_kg, [0, 0, 0.55 * c.rider_height_m], [0.3, 0.45, c.rider_height_m]]);
+      return parts;
+    }
+    _size() {
+      const c = this.cfg, cosd = Math.cos(c.cant_deg * Math.PI / 180);
+      let fixed = 0; for (const p of this._fixedParts()) fixed += p[1];
+      if (c.propulsion === "coldgas") {
+        const thr = Object.assign({}, DEFAULT_THRUSTER, { n_thrusters: 4, throat_diameter_mm: 5.0, expansion_ratio: c.expansion_ratio, regulated: true, reg_pressure_bar: c.reg_pressure_bar });
+        const probe = new ColdGasSystem(c.tank, thr, this.vc);
+        const m0 = fixed + probe.dry_mass + probe.m0;
+        const Fneed = c.gravity > 0 ? this.tw * m0 * c.gravity / (4 * cosd) : this.tw * m0 * G0 / (4 * cosd);
+        const g = GASES[c.tank.gas];
+        const unit = nozzle(c.reg_pressure_bar * 1e5, c.tank.temperature_k, g, 1e-4, c.expansion_ratio, P_ATM, this.vc.nozzle_cd, this.vc.nozzle_cf_eff, 1.0, exitPressureRatio(c.expansion_ratio, g.gamma));
+        const At = 1e-4 * Fneed / unit.thrust;
+        thr.throat_diameter_mm = 2000 * Math.sqrt(At / Math.PI);
+        this.thr_cfg = thr; this.gas = new ColdGasSystem(c.tank, thr, this.vc); this.F_design = Fneed; this.engines = null;
+      } else {
+        const ec = Object.assign({}, c.engine);
+        if (c.auto_thrust) {
+          let F = 500.0;
+          for (let i = 0; i < 30; i++) { ec.thrust_per_engine_n = F; const em = engineMass(ec, this.vr); const m0 = fixed + em.engines + em.tankage + em.propellant; F = this.tw * m0 * (c.gravity || G0) / (4 * cosd); }
+          ec.thrust_per_engine_n = F;
+        }
+        this.eng_cfg = ec; this.rules = engineRules(ec, this.vr);
+        this.engines = [0, 1, 2, 3].map(() => new RocketEngine(ec, this.rules));
+        this.F_design = ec.thrust_per_engine_n; this.gas = null;
+      }
+    }
+    parts() {
+      const c = this.cfg, out = this._fixedParts().slice(), tpos = [c.tank_x_m, 0, c.tank_z_m];
+      if (this.gas) {
+        out.push(["tanks + valves", this.gas.dry_mass - 4 * this.vc.kg_per_thruster, tpos, [0.5, 0.4, 0.15]]);
+        for (const r of this.r_thr) out.push(["thruster", this.vc.kg_per_thruster, r, [0.08, 0.08, 0.1]]);
+        out.push(["gas", this.gas.m, tpos, [0.5, 0.4, 0.15]]);
+      } else {
+        const em = engineMass(this.eng_cfg, this.vr);
+        out.push(["propellant tankage", em.tankage, tpos, [0.5, 0.4, 0.15]]);
+        for (const r of this.r_thr) out.push(["engine", em.engines / 4, r, [0.1, 0.1, 0.15]]);
+        out.push(["propellant", this.prop, tpos, [0.5, 0.4, 0.15]]);
+      }
+      return out;
+    }
+    massProps() {
+      const ps = this.parts(); let m = 0; for (const p of ps) m += p[1];
+      const cg = [0, 1, 2].map((i) => { let s = 0; for (const p of ps) s += p[1] * p[2][i]; return s / m; });
+      const J = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      for (const [, pm, pos, box] of ps) {
+        const [a, b, cc] = box, d = vsub(pos, cg);
+        const loc = [pm * (b * b + cc * cc) / 12, pm * (a * a + cc * cc) / 12, pm * (a * a + b * b) / 12], dd = vdot(d, d);
+        for (let i = 0; i < 3; i++) for (let k = 0; k < 3; k++) J[i][k] += (i === k ? loc[i] + pm * dd : 0) - pm * d[i] * d[k];
+      }
+      return [m, cg, J];
+    }
+    reset() {
+      const c = this.cfg;
+      this.t = 0; const h0 = c.start_height_m !== null && c.start_height_m !== undefined ? c.start_height_m : c.leg_height_m;
+      this.pos = [0, 0, h0]; this.vel = [0, 0, 0]; this.q = [1, 0, 0, 0]; this.w = [0, 0, 0]; this.u = [0, 0, 0, 0];
+      if (this.gas) this.gas.reset(); else { this.prop = c.engine.propellant_kg; for (const e of this.engines) e.reset(); }
+      this.Fmax = [this.F_design, this.F_design, this.F_design, this.F_design];
+      this.phase = "ground"; this.t_phase = 0; this.ref = [0, 0, 0]; this.z_ref = null; this.zint = 0;
+      this.aborted = false; this.failed = null; this.airborne = false; this.ran_dry = false; this.t_liftoff = null; this.t_burnout = null;
+      this.max_tilt = 0; this.impact_v = 0; this.t_rem = Infinity; this.n = 0; this.events = []; this.impulse = 0; this.used = 0; this.mdot = 0;
+      this.F = [0, 0, 0, 0]; this.tel = {}; this.contact = true; this.manualLand = false;
+    }
+    propellant() { return this.gas ? this.gas.m : this.prop; }
+    _event(txt) { this.events.push([Math.round(this.t * 1000) / 1000, txt]); }
+    _setPhase(ph) { this.phase = ph; this.t_phase = 0; this._event(ph); }
+    _mission(dt, zg, vz) {
+      const c = this.cfg, M = c.mission;
+      this.t_phase += dt;
+      const ph = this.phase;
+      if (ph === "ground") { if (this.t >= 0.5) this._setPhase("climb"); }
+      else if (ph === "climb") { if (this.z_ref >= zg + M.hover_height_m - 1e-3 && this.t_phase > 0.3) this._setPhase("hover"); }
+      else if (ph === "hover" && this.t_phase >= M.hold_s) this._setPhase("translate");
+      else if (ph === "translate" && this.ref[0] >= M.translate_m - 1e-9) this._setPhase("stop");
+      else if (ph === "stop" && this.t_phase >= M.hold_s) this._setPhase("yaw");
+      else if (ph === "yaw" && Math.abs(this.ref[2] - M.yaw_deg * Math.PI / 180) < 1e-9) this._setPhase("hold");
+      else if (ph === "hold" && this.t_phase >= M.hold_s) this._setPhase("land");
+      else if (ph === "land" && this.contact && this.t_phase > 0.3 && Math.abs(vz) < 0.3) { this._setPhase("done"); this.airborne = false; }
+      if (c.reserve_s > 0 && FLYING.includes(this.phase) && this.t_rem < c.reserve_s && !this.aborted) {
+        this.aborted = true;
+        if (!this.airborne) { this.failed = "cannot lift off: thrust below weight"; this._event("CANNOT LIFT OFF"); this._setPhase("done"); }
+        else { this._event(`propellant reserve reached (${this.t_rem.toFixed(1)} s left): aborting to land`); this._setPhase("land"); }
+      }
+      if (this.manualLand && FLYING.includes(this.phase)) { this.manualLand = false; this.aborted = true; this._event("pilot: land now"); this._setPhase("land"); }
+      const p2 = this.phase;
+      if (p2 === "climb") this.z_ref = Math.min(this.z_ref + M.climb_m_s * dt, zg + M.hover_height_m);
+      else if (p2 === "translate") this.ref[0] = Math.min(this.ref[0] + M.speed_m_s * dt, M.translate_m);
+      else if (p2 === "yaw") { const tgt = M.yaw_deg * Math.PI / 180, st = M.yaw_rate_deg_s * Math.PI / 180 * dt; this.ref[2] = Math.abs(tgt - this.ref[2]) <= st ? tgt : this.ref[2] + Math.sign(tgt - this.ref[2]) * st; }
+      else if (p2 === "land") this.z_ref -= M.descent_m_s * dt;
+    }
+    _control(dt, m, cg, J, cgW, vcg) {
+      const c = this.cfg, g = c.gravity, R = this.q;
+      if (this.phase === "ground" || this.phase === "done") { this.zint = 0; return [[0, 0, 0, 0], false]; }
+      const [xr, yr, yawr] = this.ref;
+      const ex = xr - cgW[0], ey = yr - cgW[1], ez = this.z_ref - cgW[2];
+      const vxr = this.phase === "translate" ? c.mission.speed_m_s : 0;
+      const vzr = this.phase === "climb" ? c.mission.climb_m_s : (this.phase === "land" ? -c.mission.descent_m_s : 0);
+      let ax = 1.2 * ex + 1.8 * (vxr - vcg[0]), ay = 1.2 * ey + 1.8 * (0 - vcg[1]);
+      const amax = 0.25 * G0, ah = Math.hypot(ax, ay);
+      if (ah > amax) { ax = ax * amax / ah; ay = ay * amax / ah; }
+      if (this.airborne) this.zint = Math.max(-1, Math.min(1, this.zint + ez * dt));
+      const az = 4.0 * ez + 3.5 * (vzr - vcg[2]) + 1.0 * this.zint;
+      const cy = Math.cos(yawr), sy = Math.sin(yawr), axb = cy * ax + sy * ay, ayb = -sy * ax + cy * ay;
+      const gz = Math.max(g + az, 0.2 * (g || G0));
+      const pitchRef = Math.max(-0.3, Math.min(0.3, Math.atan2(axb, gz))), rollRef = Math.max(-0.3, Math.min(0.3, -Math.atan2(ayb, gz)));
+      const qd = quatFromEuler(yawr, pitchRef, rollRef), qe = qmul([R[0], -R[1], -R[2], -R[3]], qd);
+      const s = qe[0] >= 0 ? 1 : -1, e = [2 * s * qe[1], 2 * s * qe[2], 2 * s * qe[3]];
+      const alpha = [0, 1, 2].map((i) => 25.0 * e[i] - 9.0 * this.w[i]);
+      alpha[2] = 8.0 * e[2] - 5.0 * this.w[2];
+      const Mb = [0, 1, 2].map((i) => J[i][0] * alpha[0] + J[i][1] * alpha[1] + J[i][2] * alpha[2]);
+      const bz = rot(R, [0, 0, 1])[2];
+      let T = m * (g + az) / Math.max(bz, 0.5); T = Math.max(T, 0);
+      const B = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
+      for (let i = 0; i < 4; i++) { const dv = this.d_thr[i], mom = cross(vsub(this.r_thr[i], cg), dv); B[0][i] = dv[2]; B[1][i] = mom[0]; B[2][i] = mom[1]; B[3][i] = mom[2]; }
+      const col = solve(B, [T, 0, 0, 0]), dif = solve(B, [0, Mb[0], Mb[1], Mb[2]]);
+      const Fmin = [0, 0, 0, 0], Fmax = this.Fmax.slice();
+      if (this.engines) this.engines.forEach((en, i) => { if (en.burned_out || (!en.running && en.starts >= en.r.max_starts)) Fmax[i] = 0; else Fmin[i] = this.rules.min_throttle * this.F_design; });
+      let sd = 1.0, lo = -1e18, hi = 1e18;
+      for (let it = 0; it < 12; it++) {
+        lo = -1e18; hi = 1e18;
+        for (let i = 0; i < 4; i++) { const ci = col[i], di = sd * dif[i]; if (ci > 1e-9) { lo = Math.max(lo, (Fmin[i] - di) / ci); hi = Math.min(hi, (Fmax[i] - di) / ci); } }
+        if (lo <= hi) break;
+        sd *= 0.6;
+      }
+      const k = lo <= hi ? Math.min(Math.max(1.0, lo), hi) : 0.0;
+      const F = [0, 1, 2, 3].map((i) => Math.min(Math.max(k * col[i] + sd * dif[i], Fmin[i]), Fmax[i]));
+      return [F.map((f, i) => this.Fmax[i] > 0 ? f / this.Fmax[i] : 0), true];
+    }
+    thrustAtFull(st) {
+      if (!st.valid || st.pmax <= 0) return 0;
+      return nozzle(st.pmax, st.T_tank, GASES[this.cfg.tank.gas], this.gas.At, this.cfg.expansion_ratio, P_ATM, this.vc.nozzle_cd, this.vc.nozzle_cf_eff, 1.0, this.gas.peRatio).thrust;
+    }
+    timeLeft() {
+      const [m] = this.massProps(), cosd = Math.cos(this.cfg.cant_deg * Math.PI / 180);
+      let usable, isp;
+      if (this.gas) {
+        const [p, T, , ok] = this.gas.state(); if (!ok) return 0;
+        const pRes = (this.cfg.reg_pressure_bar + this.vc.reg_dropout_bar) * 1e5; if (p <= pRes) return 0;
+        const rhoRes = this.gas.tab ? this.gas.tab.rho_from_pT(pRes, T) : pRes / (GASES[this.cfg.tank.gas].R * T);
+        usable = this.gas.m - rhoRes * this.gas.V;
+        const st = this.gas.thrustState(1.0); isp = st.isp > 0 ? st.isp : 50.0;
+      } else { usable = this.prop; isp = this.rules.isp_s; }
+      const md = this.cfg.gravity > 0 ? m * this.cfg.gravity / cosd / (isp * G0) : 1e-9;
+      return usable / Math.max(md, 1e-9);
+    }
+    step(dt) {
+      const c = this.cfg, g = c.gravity;
+      const [m, cg, J] = this.massProps();
+      const cgW = vadd(this.pos, rot(this.q, cg)), wW = rot(this.q, this.w), vcg = vadd(this.vel, cross(wW, rot(this.q, cg)));
+      const zg = cg[2] + c.leg_height_m;
+      if (this.z_ref === null) this.z_ref = cgW[2];
+      this._mission(dt, zg, vcg[2]);
+      const [uCmd, active] = this._control(dt, m, cg, J, cgW, vcg);
+      let F, mdot, dry, pt = 0, Tt = 0, ue = 0, Te = 0;
+      if (this.gas) {
+        for (let i = 0; i < 4; i++) this.u[i] += (uCmd[i] - this.u[i]) * Math.min(1, dt / 0.03);
+        const st = this.gas.stepMulti(dt, this.u);
+        F = st.F; mdot = st.mdot_total;
+        const full = this.thrustAtFull(st); this.Fmax = [full, full, full, full];
+        dry = (!st.valid) || full < 0.02 * this.F_design; pt = st.p_tank; Tt = st.T_tank; ue = st.ue; Te = st.Te;
+      } else {
+        F = [0, 0, 0, 0]; mdot = 0;
+        this.engines.forEach((e, i) => { if (active && uCmd[i] > 0) e.command(uCmd[i]); else if (!active) e.command(0); const [Fi, mi] = e.step(dt, this.prop > 1e-6); F[i] = Fi; mdot += mi; });
+        if (mdot * dt > this.prop) { const k = this.prop / (mdot * dt); F = F.map((f) => f * k); mdot = this.prop / dt; }
+        this.prop -= mdot * dt; dry = this.prop <= 1e-6; ue = this.rules.isp_s * G0; Te = this.rules.exit_temp_k;
+      }
+      if (dry && this.airborne && !this.contact && !this.ran_dry) { this.ran_dry = true; this.t_burnout = this.t; this._event("PROPELLANT EXHAUSTED in flight"); }
+      this.F = F; this.mdot = mdot; this.impulse += (F[0] + F[1] + F[2] + F[3]) * dt; this.used += mdot * dt;
+      let Fw = [0, 0, -m * g], Mw = [0, 0, 0];
+      for (let i = 0; i < 4; i++) { const f = rot(this.q, vscl(this.d_thr[i], F[i])), r = rot(this.q, vsub(this.r_thr[i], cg)); Fw = vadd(Fw, f); Mw = vadd(Mw, cross(r, f)); }
+      const sp = vnorm(vcg);
+      if (this.cda > 0) Fw = vadd(Fw, vscl(vcg, -0.5 * RHO_AIR * this.cda * sp));
+      Mw = vadd(Mw, vscl(wW, -5.0));
+      const L2 = c.deck_length_m / 2, W2 = c.deck_width_m / 2, fx = 0.8 * L2, fy = 0.8 * W2;
+      const pts = [[fx, fy, -c.leg_height_m], [-fx, fy, -c.leg_height_m], [-fx, -fy, -c.leg_height_m], [fx, -fy, -c.leg_height_m], [L2, W2, 0], [-L2, W2, 0], [-L2, -W2, 0], [L2, -W2, 0]];
+      let contact = false;
+      for (let k = 0; k < 8; k++) {
+        const rW = rot(this.q, vsub(pts[k], cg)), p = vadd(cgW, rW);
+        if (p[2] < 0) {
+          const vP = vadd(vcg, cross(wW, rW));
+          const fn = Math.max(0, -2.0e5 * p[2] - 4000.0 * vP[2]);
+          const vt = [vP[0], vP[1], 0], vtn = vnorm(vt);
+          const ft = vtn > 1e-6 ? vscl(vt, -Math.min(0.6 * fn, 3000.0 * vtn) / vtn) : [0, 0, 0];
+          const f = [ft[0], ft[1], fn];
+          Fw = vadd(Fw, f); Mw = vadd(Mw, cross(rW, f));
+          if (k < 4) contact = true;
+          if (vP[2] < -this.impact_v && this.ran_dry) this.impact_v = -vP[2];
+        }
+      }
+      if (this.airborne && contact && this.ran_dry && !this.failed) { this.failed = `fell after running dry: hit the ground at ${this.impact_v.toFixed(1)} m/s`; this._event("IMPACT " + this.failed); }
+      this.contact = contact;
+      if (!contact && cgW[2] > zg + 0.05 && !this.airborne) { this.airborne = true; this.t_liftoff = this.t; this._event("lift-off"); }
+      const aCg = vscl(Fw, 1 / m), Mb = rotT(this.q, Mw);
+      const Jw = [vdot(J[0], this.w), vdot(J[1], this.w), vdot(J[2], this.w)];
+      const wdot = solve(J, vsub(Mb, cross(this.w, Jw)));
+      const aO = vsub(aCg, rot(this.q, vadd(cross(wdot, cg), cross(this.w, cross(this.w, cg)))));
+      this.vel = vadd(this.vel, vscl(aO, dt)); this.pos = vadd(this.pos, vscl(this.vel, dt)); this.w = vadd(this.w, vscl(wdot, dt));
+      const dq = qmul(this.q, [0, this.w[0], this.w[1], this.w[2]]);
+      this.q = this.q.map((x, i) => x + 0.5 * dt * dq[i]);
+      const qn = Math.sqrt(this.q.reduce((a, x) => a + x * x, 0)); this.q = this.q.map((x) => x / qn);
+      this.t += dt; this.n++;
+      const up = rot(this.q, [0, 0, 1]), tilt = Math.acos(Math.max(-1, Math.min(1, up[2])));
+      this.max_tilt = Math.max(this.max_tilt, this.airborne ? tilt : 0);
+      if (tilt > 60 * Math.PI / 180 && !this.failed) { this.failed = "lost attitude control (tilt > 60 deg)"; this._event("LOST CONTROL"); }
+      if (this.phase === "climb" && this.t_phase > 3.0 + 2 * c.mission.hover_height_m / c.mission.climb_m_s && !this.airborne && !this.failed) {
+        this.failed = "cannot lift off: thrust below weight"; this._event("CANNOT LIFT OFF"); this._setPhase("done");
+      }
+      if (this.n % 50 === 0) this.t_rem = this.timeLeft();
+      const fwd = rot(this.q, [1, 0, 0]);
+      this.tel = { t: this.t, pos: this.pos.slice(), q: this.q.slice(), vel: vcg.slice(), w: this.w.slice(), F: F.slice(), mdot, prop: this.propellant(), m, cg: cg.slice(), cgW: cgW.slice(),
+        phase: this.phase, z: cgW[2] - zg, tilt, yaw: Math.atan2(fwd[1], fwd[0]), p_tank: pt, T_tank: Tt, t_rem: this.t_rem, contact, failed: this.failed,
+        x_ref: this.ref[0], z_ref: this.z_ref - zg, ue, Te, acc: vscl(Fw, 1 / m) };
+      return this.tel;
+    }
+    run(tEnd = 60, recordEvery = 20) {
+      this.reset();
+      const rec = {}; for (const k of ["t", "pos", "q", "vel", "F", "prop", "m", "cg", "phase", "z", "tilt", "p_tank", "T_tank", "t_rem", "mdot"]) rec[k] = [];
+      while (this.t < tEnd - 1e-12) {
+        const tel = this.step(this.cfg.dt);
+        if ((this.n - 1) % recordEvery === 0) for (const k in rec) rec[k].push(tel[k]);
+        if (this.phase === "done" && this.t_phase > 1.0) break;
+        if (this.failed && this.contact && this.t > (this.t_burnout || 0) + 2.0 && this.ran_dry) break;
+      }
+      rec.events = this.events; return rec;
+    }
+  }
+
   const api = { G0, RHO_AIR, P_ATM, T_AMB, ROM, A, GASES, interp, RealGasTable, realGas, nozzle, exitPressureRatio, criticalRatio, gammaFlow,
     DEFAULT_TANK, DEFAULT_THRUSTER, tankGeometry, tankMass, tankCost, gasMass, ColdGasSystem, energyReport, blastRadius, jetHazard, combineSpl,
-    SKATE_DEFAULT, SkateSim, defaultSkateScenario, idealClosedExergy };
+    SKATE_DEFAULT, SkateSim, defaultSkateScenario, idealClosedExergy,
+    engineRules, RocketEngine, engineMass, HOVER_DEFAULT, MISSION_DEFAULT, HoverSim, rot, qmul, solve };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.PropulsionPhysics = api;
 })(typeof window !== "undefined" ? window : globalThis);
