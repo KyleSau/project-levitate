@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "levitate.experiment-result/v1",
+  "title": "Project Levitate shared experiment result (v1)",
+  "description": "Exchange format between the research harness (backend/levitate, API :8000) and the visual flight lab (visual-lab, API :8100). SI units throughout. Producers must set evidence honestly; consumers must display it.",
+  "type": "object",
+  "required": ["schema_version", "source", "kind", "evidence", "created", "config", "summary"],
+  "properties": {
+    "schema_version": {"const": "levitate.experiment-result/v1"},
+    "source": {"enum": ["research_harness", "visual_lab", "external_solver", "measurement"]},
+    "experiment_id": {"type": ["integer", "string", "null"]},
+    "kind": {"type": "string", "description": "rotor_design | ead_design | ehd_wire | flight_sim | solver_field | ..."},
+    "evidence": {"enum": ["analytical_estimate", "simplified_numerical_simulation", "high_fidelity_numerical_simulation", "physically_measured", "hypothetical_ideal"]},
+    "solver": {"type": "string"},
+    "created": {"type": "number", "description": "unix seconds"},
+    "config": {"type": "object"},
+    "summary": {"type": "object", "description": "flat scalar dict for tables"},
+    "verdict": {"type": ["string", "null"], "description": "FEASIBLE | MARGINAL | INFEASIBLE | VALID | ..."},
+    "assumptions": {"type": ["object", "null"], "description": "assumption key -> value used (per scenario allowed)"},
+    "versions": {"type": ["object", "null"], "description": "code_sha, python, numpy, scipy, solver versions"},
+    "vehicle": {
+      "description": "Rigid-body + actuator model a flight simulator can consume directly",
+      "type": ["object", "null"],
+      "required": ["mass_kg", "inertia_kgm2", "cg_m", "actuators"],
+      "properties": {
+        "mass_kg": {"type": "number"},
+        "inertia_kgm2": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "minItems": 3, "maxItems": 3, "description": "about CG, body axes x fwd, y left, z up"},
+        "cg_m": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "CG in body geometric frame (origin = deck centre)"},
+        "dimensions_m": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "actuators": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["pos_m", "axis", "max_force_n"],
+            "properties": {
+              "pos_m": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "body frame, origin = deck centre"},
+              "axis": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "unit force direction, body frame"},
+              "max_force_n": {"type": "number"},
+              "spin": {"type": "integer", "description": "+1 CCW from above, -1 CW, 0 none"},
+              "torque_ratio_m": {"type": "number", "description": "reaction torque / force (rotors)"},
+              "time_constant_s": {"type": "number"},
+              "mechanism": {"type": "string", "description": "physical momentum-exchange mechanism, or 'hypothetical'"},
+              "radius_m": {"type": "number"}
+            }
+          }
+        },
+        "power_model": {
+          "type": ["object", "null"],
+          "description": "type=momentum_theory: P_elec_per_actuator = T^1.5 * k_duct / (FM_eff * eta * sqrt(2 rho A)) + avionics_w (ground effect optional)",
+          "properties": {
+            "type": {"type": "string"},
+            "disk_area_m2": {"type": "number"},
+            "figure_of_merit": {"type": "number"},
+            "duct_factor": {"type": "number"},
+            "motor_efficiency": {"type": "number"},
+            "avionics_w": {"type": "number"},
+            "battery_energy_j": {"type": "number"},
+            "battery_max_power_w": {"type": "number"}
+          }
+        },
+        "drag": {"type": ["object", "null"], "properties": {"cd": {"type": "number"}, "area_xy_m2": {"type": "number"}, "area_z_m2": {"type": "number"}}}
+      }
+    },
+    "fields": {
+      "description": "Solver field data on a regular grid (for overlays). Must come from an actual solver run.",
+      "type": ["object", "null"],
+      "properties": {
+        "grid": {"type": "object", "properties": {"x": {"type": "array"}, "y": {"type": "array"}, "z": {"type": "array"}}},
+        "quantities": {"type": "object", "description": "name -> {unit, values (nested arrays, null = outside domain)}"}
+      }
+    },
+    "trajectory": {
+      "type": ["object", "null"],
+      "description": "Recorded state history: t[], pos[][3], quat[][4] (w,x,y,z body->world), vel[][3], omega[][3] (body), forces/torques optional"
+    }
+  }
+}
