@@ -10,6 +10,7 @@ import { ParameterEditor } from "./panels/ParameterEditor";
 import { FeasibilityPanel } from "./panels/FeasibilityPanel";
 import { SolversPanel } from "./panels/SolversPanel";
 import { ExperimentsPanel } from "./panels/ExperimentsPanel";
+import { LivePad, useLive } from "./live";
 
 type Tab = "lab" | "params" | "feasibility" | "solvers" | "experiments";
 
@@ -55,6 +56,19 @@ export default function App() {
     setPlaying(true);
     setTab("lab");
   }, []);
+
+  const onLive = useCallback((r: SimResult, isLive: boolean) => {
+    setRes(r);
+    if (isLive) {
+      setPlaying(false);
+      setIdx(r.trajectory.t.length - 1);
+    } else {
+      setIdx(0);
+      simTime.current = 0;
+      setPlaying(true);
+    }
+  }, []);
+  const live = useLive(onLive);
 
   useEffect(() => { load("ideal"); }, [load]);
   useEffect(() => {
@@ -156,9 +170,12 @@ export default function App() {
           </select>
         </label>
         <button onClick={() => load(preset)}>re-run demo</button>
+        <button className="primary" disabled={live.state.active} onClick={() => { setTab("lab"); live.start(res?.mode_config, res?.gains); }}
+          title="real-time interactive session with the current mode & gains (default vehicle)">● LIVE session</button>
       </nav>
       {loading && <div className="banner">{loading}</div>}
       {error && <div className="banner error">{error}</div>}
+      {live.state.notice && !live.state.active && <div className="banner">{live.state.notice}</div>}
       <main className={tab === "lab" ? "" : "hidden"}>
         {res && charts && (
           <div className="lab">
@@ -166,6 +183,7 @@ export default function App() {
               <div className="viewport">
                 <Lab3D res={res} idx={idx} opt={opt} field={field} />
                 <SceneToggles opt={opt} setOpt={setOpt} />
+                {live.state.active && <LivePad send={live.send} state={live.state} yawDeg={res.trajectory.ref_yaw_deg[idx] ?? 0} />}
                 <div className="labels-box">
                   {res.feasibility.failing.length > 0 && (
                     <div style={{ color: "var(--bad)", fontWeight: 600 }}>
@@ -182,7 +200,7 @@ export default function App() {
                 </div>
               </div>
               <Timeline t={res.trajectory.t} idx={idx} playing={playing} speed={speed} phases={res.phases}
-                phaseIdx={res.trajectory.phase} events={res.events} onSeek={(i) => { setPlaying(false); seek(i); }}
+                phaseIdx={res.trajectory.phase} events={res.events} onSeek={(i) => { if (live.state.active) return; setPlaying(false); seek(i); }}
                 onPlay={() => { if (idx >= res.trajectory.t.length - 1) seek(0); setPlaying(true); }}
                 onPause={() => setPlaying(false)} onRestart={() => { seek(0); setPlaying(true); }}
                 onStep={(d) => { setPlaying(false); seek(idx + d); }} onSpeed={setSpeed} />

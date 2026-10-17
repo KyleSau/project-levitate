@@ -84,3 +84,4 @@ def analyse_ep(req: SimRequest):
 
 
 from . import routes  # noqa: E402,F401  (registers the remaining endpoints)
+from . import live  # noqa: E402,F401  (registers /ws/live)

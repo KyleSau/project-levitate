@@ -50,6 +50,9 @@ dE/dt   = P_cell(Σ P_i(f_i) + P_avionics)
   |λ_max| h ≤ 2.0 (RK4 real-axis limit 2.785). For the default board |λ_max| = 3164 s⁻¹ → 2 sub-steps.
 * Offline high accuracy: SciPy `solve_ivp` DOP853 (rtol 1e-9, atol 1e-12) over each control interval, same
   plant and controller (`integrator: "dop853"`, `/api/offline`).
+* Live mode (`/ws/live`): the server steps the same RK4 simulation paced to wall-clock time and streams every
+  recorded frame; commands (goto / land / takeoff / gust push) only change set-points or apply a declared external
+  force. The full session recording is returned for replay / save / export.
 * The browser never integrates physics: it replays the recorded state (100 Hz frames). There is no
   predetermined path and no easing; the mission autopilot only produces controller set-points.
 

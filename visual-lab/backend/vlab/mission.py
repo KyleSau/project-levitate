@@ -249,10 +249,48 @@ class Autopilot:
         if self.sub == "landed":
             self.p = meas[0:3].copy()
 
+    # ------------------------------------------------------------------ live commands
+    def command(self, t: float, kind: str, rel=None, yaw_deg=None, alt_m=None, speed_m_s: float = 0.35) -> str:
+        """Interactive command: replaces the remaining mission. Returns '' or a reason for refusal.
+        Commands only change controller set-points; the motion still comes from the integrated forces."""
+        s = self.step
+        landed = not self.armed
+        if kind == "goto":
+            if landed:
+                return "vehicle is landed/disarmed: take off first"
+            rel = np.array(rel or (0, 0, 0), float)
+            tgt = self.p + rel
+            tgt[2] = max(tgt[2], self.hz + 0.03)
+            dist = float(np.linalg.norm(tgt - self.p))
+            dur = max(1.2, 1.875 * dist / speed_m_s)       # quintic peak speed = 1.875 * mean speed
+            yaw = self.yaw if yaw_deg is None else math.radians(yaw_deg)
+            new = [Step(kind="goto", duration_s=dur, target=tuple(tgt), yaw_deg=math.degrees(yaw), segment="L",
+                        label=f"L  live: goto {np.round(tgt, 3).tolist()} m"),
+                   Step(kind="hold", duration_s=1e9, segment="L", label="L  live: hover, awaiting commands")]
+        elif kind == "land":
+            if landed:
+                return "already landed"
+            new = [Step(kind="land", duration_s=1e9, segment="L", label="L  live: controlled descent and landing")]
+        elif kind == "takeoff":
+            if not landed or (s is not None and s.kind == "land" and self.sub != "landed"):
+                return "already flying"
+            new = [Step(kind="arm", duration_s=0.5, segment="L", label="L  live: arm"),
+                   Step(kind="takeoff", duration_s=2.0, alt_m=alt_m or 0.25, segment="L", label="L  live: takeoff"),
+                   Step(kind="hold", duration_s=1e9, segment="L", label="L  live: hover, awaiting commands")]
+        else:
+            return f"unknown command {kind}"
+        self.steps = self.steps[: self.i + 1] + new
+        self._force_next = True
+        self.event(t, "COMMAND", f"live command: {kind}" + (f" {list(rel)}" if rel is not None else ""))
+        return ""
+
     def _finished(self, t) -> bool:
         s = self.step
         if s is None:
             return False
+        if getattr(self, "_force_next", False):
+            self._force_next = False
+            return True
         if s.kind == "land":
             return self.sub == "landed" and t - self.t_sub >= s.duration_s
         return t - self.t0 >= s.duration_s - 1e-9

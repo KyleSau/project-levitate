@@ -98,139 +98,187 @@ def analyse_request(req: SimRequest) -> dict:
             "evidence": rm.evidence, "contact_lambda_max": plant.contact_lambda_max}
 
 
-def run(req: SimRequest, progress=None) -> dict:
-    t_wall = time.perf_counter()
-    mc = req.mode
-    st = req.settings
-    v0 = build_vehicle(req)
-    rm = resolve(v0, mc)
-    plant = Plant(rm, mc.environment)
-    feas = analyse(rm, mc, plant)
-    rng = np.random.default_rng(st.seed)
-    mission = req.mission or demo_mission()
-    if req.mission is None and not mc.disturbances.impulses:
-        # demo: lateral gust impulse during the hover segment B (t ~ 5 s) to show disturbance rejection
-        from .modes import Impulse
-        mc = mc.model_copy(deep=True)
-        mc.disturbances.impulses = [Impulse(t_s=5.0, duration_s=0.10, force_n=(0.0, 0.04, 0.0))]
-    m_model = plant.m * (1 + mc.disturbances.controller_mass_error)
-    ctrl = Controller(plant, req.gains, rm.f_min, rm.f_max, mass_model=m_model, torque_limit=rm.torque_limit,
-                      power_cap_w=rm.power_cap_w)
-    x = plant.rest_state()
-    h_cg = plant.cg[2] + rm.vehicle.height_m / 2
-    ap = Autopilot(mission, plant.m * plant.g, h_cg, x)
-    dt = st.dt
-    ctrl_every = max(1, int(round(1.0 / (req.gains.control_hz * dt))))
-    dtc = ctrl_every * dt
-    rec_every = max(1, int(round(1.0 / (st.record_hz * dt))))
-    n = plant.n
-    delay_n = int(round(rm.transport_delay_s / dtc))
-    fifo: deque = deque([np.zeros(n)] * delay_n, maxlen=max(delay_n, 1)) if delay_n > 0 else None
-    u_app = np.zeros(n)
-    u_cmd = np.zeros(n)
-    diag: dict = {}
-    temps = np.full(n, rm.thermal.ambient_c if rm.thermal else 25.0)
-    derate = np.ones(n)
-    gust = np.zeros(3)
-    rec = Recorder()
-    flags = dict(battery_depleted=False, thermal_derate=False, loss_of_control=False, diverged=False,
-                 thrust_deficit_s=0.0, power_limited_s=0.0, saturated_s=0.0)
-    failed_act = mc.disturbances.actuator_failure_index
-    inst = ~plant.lag
-    t = 0.0
-    k = 0
-    n_max = int(st.t_max_s / dt)
-    use_dop = st.integrator == "dop853"
-    if use_dop:
-        from .offline import dop853_interval
-    ref = None
-    last_ref_phase = None
-    max_pen = 0.0
-    while k < n_max:
-        t = k * dt
-        if k % ctrl_every == 0:
-            meas = x.copy()
-            if mc.disturbances.sensor_noise_pos_m:
-                meas[0:3] += rng.normal(0, mc.disturbances.sensor_noise_pos_m, 3)
-            if mc.disturbances.sensor_noise_att_rad:
-                dth = rng.normal(0, mc.disturbances.sensor_noise_att_rad, 3)
-                meas[6:10] = quat.normalize(quat.mul(x[6:10], np.array([1.0, *(dth / 2)])))
-            c = plant.contact(x[0:3], x[3:6], quat.to_rot(x[6:10]), x[10:13])
-            contact_n = c[2] if c else 0.0
-            ref = ap.update(t, meas, contact_n, dtc)
-            if ap.done:
-                break
-            f_min = np.array(rm.f_min, float)
-            f_max = np.array(rm.f_max, float) * derate
-            if failed_act is not None and t >= mc.disturbances.actuator_failure_t_s:
-                f_min[failed_act] = f_max[failed_act] = 0.0
-                if not any(e["kind"] == "ACTUATOR_FAILURE" for e in ap.events):
-                    ap.event(t, "ACTUATOR_FAILURE", f"actuator A{failed_act} failed (force forced to 0)")
-            if rm.energy_j < math.inf and x[-1] >= rm.energy_j:
-                f_min[:] = 0.0
-                f_max[:] = 0.0
-                if not flags["battery_depleted"]:
-                    flags["battery_depleted"] = True
-                    ap.event(t, "BATTERY_DEPLETED", f"usable battery energy {rm.energy_j:.0f} J exhausted")
-            if flags["loss_of_control"]:
-                ref.armed = False
-            u_cmd, diag = ctrl.update(meas, ref, f_min, f_max)
-            u_cmd = np.clip(u_cmd, f_min, f_max)
-            airborne = contact_n == 0.0
-            if diag.get("thrust_deficit") and ref.armed:
-                flags["thrust_deficit_s"] += dtc
-                if flags["thrust_deficit_s"] >= 0.5 and not any(e["kind"] == "THRUST_DEFICIT" for e in ap.events):
-                    ap.event(t, "THRUST_DEFICIT", "commanded vertical force exceeds available thrust: cannot hold altitude")
-            if diag.get("power_limited"):
-                flags["power_limited_s"] += dtc
-                if not any(e["kind"] == "POWER_LIMIT" for e in ap.events):
-                    ap.event(t, "POWER_LIMIT", "electrical power cap reached: thrust scaled down")
-            if diag.get("saturated") and airborne:
-                flags["saturated_s"] += dtc
-            if fifo is not None:
-                fifo.append(u_cmd.copy())
-                u_app = fifo[0]
-            else:
-                u_app = u_cmd
-            x[13:13 + n][inst] = u_app[inst]
-            # thermal model (lumped, explicit Euler at control rate; time constant R C ~ 40 s >> dtc)
-            if rm.thermal is not None and rm.power.kind == "rotor":
-                th = rm.thermal
-                eta = mc.efficiency.motor_efficiency if mc.efficiency.enabled else 1.0
-                q_heat = rm.power.actuator_power(x[13:13 + n]) * (1 - eta)
-                temps += dtc * (q_heat - (temps - th.ambient_c) / th.thermal_resistance_k_per_w) / th.heat_capacity_j_per_k
-                derate = np.clip(1.0 - (temps - th.max_temp_c) / 10.0, 0.0, 1.0)
-                if np.any(derate < 1) and not flags["thermal_derate"]:
-                    flags["thermal_derate"] = True
-                    ap.event(t, "THERMAL_DERATE", f"actuator temperature above {th.max_temp_c} C: force derated")
-            # loss of control
-            tilt = math.degrees(math.acos(max(-1.0, min(1.0, quat.to_rot(x[6:10])[2, 2]))))
-            if tilt > 75 and not flags["loss_of_control"] and x[2] > h_cg + 0.005:
-                flags["loss_of_control"] = True
-                ap.event(t, "LOSS_OF_CONTROL", f"tilt {tilt:.0f} deg > 75 deg: motors disarmed")
-        f_ext = impulse_force(mc, t)
-        if mc.disturbances.gust_std_n:
-            a_ou = dt / mc.disturbances.gust_tau_s
-            gust = gust * (1 - a_ou) + mc.disturbances.gust_std_n * math.sqrt(2 * a_ou) * rng.normal(0, 1, 3)
-            f_ext = f_ext + gust
-        if k % rec_every == 0:
-            _record(rec, plant, x, u_app, u_cmd, f_ext, ref, ap, diag, temps, t)
-            cz = (x[0:3][2] + (plant.corners @ quat.to_rot(x[6:10]).T)[:, 2]).min()
-            max_pen = max(max_pen, -cz)
-        if use_dop:
-            x = dop853_interval(plant, x, u_app, f_ext, dt)
+class Simulation:
+    """Steppable closed-loop simulation. `run()` steps it to completion; the live WebSocket session steps it
+    in real time and may inject commands between steps. Physics is identical in both cases."""
+
+    def __init__(self, req: SimRequest, mission: list[Step] | None = None, demo_gust: bool = True):
+        self.t_wall0 = time.perf_counter()
+        self.req = req
+        mc = req.mode
+        st = req.settings
+        v0 = build_vehicle(req)
+        self.rm = rm = resolve(v0, mc)
+        self.plant = plant = Plant(rm, mc.environment)
+        self.feas = analyse(rm, mc, plant)
+        self.rng = np.random.default_rng(st.seed)
+        mission = mission or req.mission or demo_mission()
+        if demo_gust and req.mission is None and not mc.disturbances.impulses:
+            # demo: lateral gust impulse during the hover segment B (t ~ 5 s) to show disturbance rejection
+            from .modes import Impulse
+            mc = mc.model_copy(deep=True)
+            mc.disturbances.impulses = [Impulse(t_s=5.0, duration_s=0.10, force_n=(0.0, 0.04, 0.0))]
+        self.mc = mc
+        m_model = plant.m * (1 + mc.disturbances.controller_mass_error)
+        self.ctrl = Controller(plant, req.gains, rm.f_min, rm.f_max, mass_model=m_model,
+                               torque_limit=rm.torque_limit, power_cap_w=rm.power_cap_w)
+        self.x = plant.rest_state()
+        self.h_cg = plant.cg[2] + rm.vehicle.height_m / 2
+        self.ap = Autopilot(list(mission), plant.m * plant.g, self.h_cg, self.x)
+        self.dt = st.dt
+        self.ctrl_every = max(1, int(round(1.0 / (req.gains.control_hz * self.dt))))
+        self.dtc = self.ctrl_every * self.dt
+        self.rec_every = max(1, int(round(1.0 / (st.record_hz * self.dt))))
+        n = plant.n
+        delay_n = int(round(rm.transport_delay_s / self.dtc))
+        self.fifo: deque | None = deque([np.zeros(n)] * delay_n, maxlen=max(delay_n, 1)) if delay_n > 0 else None
+        self.u_app = np.zeros(n)
+        self.u_cmd = np.zeros(n)
+        self.diag: dict = {}
+        self.temps = np.full(n, rm.thermal.ambient_c if rm.thermal else 25.0)
+        self.derate = np.ones(n)
+        self.gust = np.zeros(3)
+        self.rec = Recorder()
+        self.flags = dict(battery_depleted=False, thermal_derate=False, loss_of_control=False, diverged=False,
+                          thrust_deficit_s=0.0, power_limited_s=0.0, saturated_s=0.0)
+        self.extra_impulses: list = []
+        self.inst = ~plant.lag
+        self.k = 0
+        self.n_max = int(st.t_max_s / self.dt)
+        self.use_dop = st.integrator == "dop853"
+        self.ref = None
+        self.max_pen = 0.0
+        self.finished = False
+
+    @property
+    def t(self) -> float:
+        return self.k * self.dt
+
+    def ext_force(self, t: float) -> np.ndarray:
+        F = impulse_force(self.mc, t)
+        for (t0, dur, f) in self.extra_impulses:
+            if t0 <= t < t0 + dur:
+                F = F + np.asarray(f, float)
+        return F
+
+    def _control(self, t: float):
+        mc, rm, plant, ap, flags = self.mc, self.rm, self.plant, self.ap, self.flags
+        x = self.x
+        n = plant.n
+        dtc = self.dtc
+        meas = x.copy()
+        if mc.disturbances.sensor_noise_pos_m:
+            meas[0:3] += self.rng.normal(0, mc.disturbances.sensor_noise_pos_m, 3)
+        if mc.disturbances.sensor_noise_att_rad:
+            dth = self.rng.normal(0, mc.disturbances.sensor_noise_att_rad, 3)
+            meas[6:10] = quat.normalize(quat.mul(x[6:10], np.array([1.0, *(dth / 2)])))
+        c = plant.contact(x[0:3], x[3:6], quat.to_rot(x[6:10]), x[10:13])
+        contact_n = c[2] if c else 0.0
+        ref = ap.update(t, meas, contact_n, dtc)
+        self.ref = ref
+        if ap.done:
+            self.finished = True
+            return
+        f_min = np.array(rm.f_min, float)
+        f_max = np.array(rm.f_max, float) * self.derate
+        fa = mc.disturbances.actuator_failure_index
+        if fa is not None and t >= mc.disturbances.actuator_failure_t_s:
+            f_min[fa] = f_max[fa] = 0.0
+            if not any(e["kind"] == "ACTUATOR_FAILURE" for e in ap.events):
+                ap.event(t, "ACTUATOR_FAILURE", f"actuator A{fa} failed (force forced to 0)")
+        if rm.energy_j < math.inf and x[-1] >= rm.energy_j:
+            f_min[:] = 0.0
+            f_max[:] = 0.0
+            if not flags["battery_depleted"]:
+                flags["battery_depleted"] = True
+                ap.event(t, "BATTERY_DEPLETED", f"usable battery energy {rm.energy_j:.0f} J exhausted")
+        if flags["loss_of_control"]:
+            ref.armed = False
+        u_cmd, diag = self.ctrl.update(meas, ref, f_min, f_max)
+        u_cmd = np.clip(u_cmd, f_min, f_max)
+        self.u_cmd, self.diag = u_cmd, diag
+        airborne = contact_n == 0.0
+        if diag.get("thrust_deficit") and ref.armed:
+            flags["thrust_deficit_s"] += dtc
+            if flags["thrust_deficit_s"] >= 0.5 and not any(e["kind"] == "THRUST_DEFICIT" for e in ap.events):
+                ap.event(t, "THRUST_DEFICIT", "commanded vertical force exceeds available thrust: cannot hold altitude")
+        if diag.get("power_limited"):
+            flags["power_limited_s"] += dtc
+            if not any(e["kind"] == "POWER_LIMIT" for e in ap.events):
+                ap.event(t, "POWER_LIMIT", "electrical power cap reached: thrust scaled down")
+        if diag.get("saturated") and airborne:
+            flags["saturated_s"] += dtc
+        if self.fifo is not None:
+            self.fifo.append(u_cmd.copy())
+            self.u_app = self.fifo[0]
         else:
-            x = plant.step(x, u_app, f_ext, dt)
-        if not np.all(np.isfinite(x)) or abs(x[2]) > 1e3:
-            flags["diverged"] = True
-            ap.event(t, "DIVERGED", "state not finite")
-            break
-        k += 1
-        if progress and k % 2000 == 0:
-            progress(k / n_max)
-    _record(rec, plant, x, u_app, u_cmd, impulse_force(mc, t), ref, ap, diag, temps, t + dt)
-    wall = time.perf_counter() - t_wall
-    return _package(req, mc, rm, plant, feas, rec, ap, flags, wall, max_pen, k * dt)
+            self.u_app = u_cmd
+        x[13:13 + n][self.inst] = self.u_app[self.inst]
+        # thermal model (lumped, explicit Euler at control rate; time constant R C ~ 40 s >> dtc)
+        if rm.thermal is not None and rm.power.kind == "rotor":
+            th = rm.thermal
+            eta = mc.efficiency.motor_efficiency if mc.efficiency.enabled else 1.0
+            q_heat = rm.power.actuator_power(x[13:13 + n]) * (1 - eta)
+            self.temps += dtc * (q_heat - (self.temps - th.ambient_c) / th.thermal_resistance_k_per_w) / th.heat_capacity_j_per_k
+            self.derate = np.clip(1.0 - (self.temps - th.max_temp_c) / 10.0, 0.0, 1.0)
+            if np.any(self.derate < 1) and not flags["thermal_derate"]:
+                flags["thermal_derate"] = True
+                ap.event(t, "THERMAL_DERATE", f"actuator temperature above {th.max_temp_c} C: force derated")
+        tilt = math.degrees(math.acos(max(-1.0, min(1.0, quat.to_rot(x[6:10])[2, 2]))))
+        if tilt > 75 and not flags["loss_of_control"] and x[2] > self.h_cg + 0.005:
+            flags["loss_of_control"] = True
+            ap.event(t, "LOSS_OF_CONTROL", f"tilt {tilt:.0f} deg > 75 deg: motors disarmed")
+
+    def step(self) -> bool:
+        """Advance one integration step; returns False when the simulation has ended."""
+        if self.finished or self.k >= self.n_max:
+            self.finished = True
+            return False
+        t = self.t
+        if self.k % self.ctrl_every == 0:
+            self._control(t)
+            if self.finished:
+                return False
+        mc = self.mc
+        f_ext = self.ext_force(t)
+        if mc.disturbances.gust_std_n:
+            a_ou = self.dt / mc.disturbances.gust_tau_s
+            self.gust = self.gust * (1 - a_ou) + mc.disturbances.gust_std_n * math.sqrt(2 * a_ou) * self.rng.normal(0, 1, 3)
+            f_ext = f_ext + self.gust
+        if self.k % self.rec_every == 0:
+            self.record(f_ext, t)
+        if self.use_dop:
+            from .offline import dop853_interval
+            self.x = dop853_interval(self.plant, self.x, self.u_app, f_ext, self.dt)
+        else:
+            self.x = self.plant.step(self.x, self.u_app, f_ext, self.dt)
+        if not np.all(np.isfinite(self.x)) or abs(self.x[2]) > 1e3:
+            self.flags["diverged"] = True
+            self.ap.event(t, "DIVERGED", "state not finite")
+            self.finished = True
+            return False
+        self.k += 1
+        return True
+
+    def record(self, f_ext, t):
+        x = self.x
+        _record(self.rec, self.plant, x, self.u_app, self.u_cmd, f_ext, self.ref, self.ap, self.diag, self.temps, t)
+        cz = (x[2] + (self.plant.corners @ quat.to_rot(x[6:10]).T)[:, 2]).min()
+        self.max_pen = max(self.max_pen, -cz)
+
+    def package(self) -> dict:
+        self.record(self.ext_force(self.t), self.t)
+        wall = time.perf_counter() - self.t_wall0
+        return _package(self.req, self.mc, self.rm, self.plant, self.feas, self.rec, self.ap, self.flags, wall,
+                        self.max_pen, self.t)
+
+
+def run(req: SimRequest, progress=None) -> dict:
+    sim = Simulation(req)
+    while sim.step():
+        if progress and sim.k % 2000 == 0:
+            progress(sim.k / sim.n_max)
+    return sim.package()
 
 
 def _record(rec: Recorder, plant: Plant, x, u_app, u_cmd, f_ext, ref, ap: Autopilot, diag, temps, t):
