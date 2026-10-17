@@ -526,18 +526,19 @@ function makeHoverMode(kind) {
       status("on the pad · tap FLY", "var(--cyan)");
     },
     sizing() {
-      const [m0] = sim.massProps(), cosd = Math.cos(cfg.cant_deg * Math.PI / 180), W0 = m0 * G0;
+      const sm = sim || new PP.HoverSim(cfg);
+      const [m0] = sm.massProps(), cosd = Math.cos(cfg.cant_deg * Math.PI / 180), W0 = m0 * G0;
       let prop0, usable, isp, ue, Te, eRep = null;
-      if (sim.gas) {
-        const st = sim.gas.thrustState(1);
-        prop0 = sim.gas.m0; isp = st.isp; ue = st.ue; Te = st.Te;
-        const pRes = (cfg.reg_pressure_bar + sim.vc.reg_dropout_bar) * 1e5;
-        usable = prop0 - realOrIdealDensity(cfg.tank, pRes) * sim.gas.V;
+      if (sm.gas) {
+        const st = sm.gas.thrustState(1);
+        prop0 = sm.gas.m0; isp = st.isp; ue = st.ue; Te = st.Te;
+        const pRes = (cfg.reg_pressure_bar + sm.vc.reg_dropout_bar) * 1e5;
+        usable = prop0 - realOrIdealDensity(cfg.tank, pRes) * sm.gas.V;
         eRep = PP.energyReport(cfg.tank);
-      } else { prop0 = cfg.engine.propellant_kg; usable = prop0; isp = sim.rules.isp_s; ue = isp * G0; Te = sim.rules.exit_temp_k; }
-      const k = sim.gas ? sim.gas.m_wall / prop0 : sim.vr.tankage_fraction;
+      } else { prop0 = cfg.engine.propellant_kg; usable = prop0; isp = sm.rules.isp_s; ue = isp * G0; Te = sm.rules.exit_temp_k; }
+      const k = sm.gas ? sm.gas.m_wall / prop0 : sm.vr.tankage_fraction;
       const tAn = usable > 0 ? isp * cosd * Math.log(m0 / (m0 - usable)) : 0, tUb = isp * cosd * Math.log((1 + k) / k);
-      const jet = PP.jetHazard(sim.F_design, ue, Te, sim.F_design / ue, sim.gas ? ROM.assumptions.rocket.acoustic_eff_coldgas : ROM.assumptions.rocket.acoustic_eff);
+      const jet = PP.jetHazard(sm.F_design, ue, Te, sm.F_design / ue, sm.gas ? ROM.assumptions.rocket.acoustic_eff_coldgas : ROM.assumptions.rocket.acoustic_eff);
       const jetPowerKw = 0.5 * (W0 / cosd) * ue / 1000;
       return { m0, W0, prop0, usable, isp, ue, Te, tAn, tUb, k, jet, eRep, jetPowerKw, spl4: PP.combineSpl([jet.spl_rider_db, jet.spl_rider_db, jet.spl_rider_db, jet.spl_rider_db]) };
     },
@@ -603,7 +604,7 @@ function makeHoverMode(kind) {
     dash(tab) { return hoverDash(this, tab); },
     sim: () => sim, info: () => info, recording: () => flying,
     summary() {
-      const i = info || this.sizing();
+      const i = (sim && info) ? info : this.sizing();
       return [`${fmt(i.tAn, 1)} s hover`, `${fmt(i.m0, 0)} kg gross · ${fmt(i.prop0, 1)} kg ${isGas ? "air" : "propellant"} · jet power ${fmt(i.jetPowerKw, 0)} kW · ceiling ${fmt(i.tUb, 0)} s for any tank size`];
     },
   };
