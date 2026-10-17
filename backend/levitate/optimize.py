@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from .catalog import BATTERIES, MATERIALS, MOTORS, global_assumptions
 from .db import ExperimentDB
 from .design import Design
-from .ehd_board import EADDesign, ehd_assumptions, evaluate_ead
+from .ehd_board import EADDesign, _onset_voltage, ehd_assumptions, evaluate_ead
 from .evaluate import evaluate
 from .solvers.adapters import ead_summary, rotor_summary
 
@@ -176,13 +176,22 @@ def run_ead_study(db: ExperimentDB, cfg: EADStudyConfig, study_id: int | None = 
     study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=cfg.seed))
     best_ids = {}
 
+    spark = ehd_assumptions().values(cfg.scenario)["spark_mean_field"]
+
     def objective(trial):
+        gap = trial.suggest_float("gap_mm", 3.0, 30.0)
+        r_um = trial.suggest_float("wire_radius_um", 12.5, 50.0)
+        # voltage searched inside the physical operating window [corona onset, sparkover]
+        v0 = _onset_voltage(r_um * 1e-6, gap / 1000)
+        v_spark = spark * gap / 1000
+        frac = trial.suggest_float("window_fraction", 0.02, 1.0)
+        volt = v0 + frac * max(v_spark - v0, 0.0)
         d = EADDesign(
             name=f"ead-{trial.number}",
             width_mm=trial.suggest_float("width_mm", *cfg.width_range_mm),
-            voltage_kv=trial.suggest_float("voltage_kv", 2.0, 30.0),
-            gap_mm=trial.suggest_float("gap_mm", 3.0, 30.0),
-            wire_radius_um=trial.suggest_float("wire_radius_um", 12.5, 50.0),
+            voltage_kv=max(volt / 1000, 1.0),
+            gap_mm=gap,
+            wire_radius_um=r_um,
             pitch_over_gap=trial.suggest_float("pitch_over_gap", 1.0, 3.0),
             n_stages=trial.suggest_int("n_stages", 1, 8),
             battery=trial.suggest_categorical("battery", list(BATTERIES)),

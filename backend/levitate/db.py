@@ -1,7 +1,8 @@
-"""SQLite experiment store. Every row records config, assumptions, solver, versions and code hash."""
+﻿"""SQLite experiment store. Every row records config, assumptions, solver, versions and code hash."""
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -10,7 +11,7 @@ from typing import Any
 
 from .provenance import config_hash, environment_versions
 
-DEFAULT_DB = Path(__file__).resolve().parents[2] / "data" / "experiments.sqlite"
+DEFAULT_DB = Path(os.environ.get("LEVITATE_DB", Path(__file__).resolve().parents[2] / "data" / "experiments.sqlite"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS experiments (

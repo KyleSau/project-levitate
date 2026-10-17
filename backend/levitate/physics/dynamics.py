@@ -214,6 +214,12 @@ def simulate(vp: VehicleParams, cfg: SimConfig = SimConfig()) -> SimResult:
         p_ref, v_ref, a_ref = pre.step(np.array(wp.pos, float), cfg.dt)
         p, v, q, w = x[0:3], x[3:6], x[6:10], x[10:13]
         R = quat_to_rot(q)
+        final = cfg.mission[-1]
+        # landing phase: below 5 cm on the final (ground-level) waypoint, descend at a fixed 0.25 m/s
+        if wp is final and final.pos[2] <= 0 and t > final.t and p[2] < 0.05:
+            p_ref = np.array([p_ref[0], p_ref[1], p[2]])
+            v_ref = np.array([v_ref[0], v_ref[1], -0.25])
+            a_ref = np.array([a_ref[0], a_ref[1], 0.0])
 
         # sensing
         p_m = p + rng.normal(0, cfg.sensor_noise_pos_m, 3) if cfg.sensor_noise_pos_m else p
@@ -250,8 +256,7 @@ def simulate(vp: VehicleParams, cfg: SimConfig = SimConfig()) -> SimResult:
             motors_armed = False
 
         # landing logic: disarm once the final waypoint is below ground and we have touched down
-        final = cfg.mission[-1]
-        if wp is final and p[2] < 0.01 and t > final.t:
+        if wp is final and final.pos[2] <= 0 and p[2] < 0.003 and t > final.t:
             if landed_at is None:
                 landed_at = t
             motors_armed = False
