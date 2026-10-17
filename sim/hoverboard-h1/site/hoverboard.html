@@ -139,7 +139,7 @@ body { background: var(--bg); color: var(--ink); font: 14px/1.4 var(--body); ove
   </div>
   <div class="seg"><button type="button" id="reset">Reset to start</button><button type="button" id="toDock">Go to dock</button><button type="button" id="toPond">Go to pond</button></div>
   <p class="note">Physics runs at 1,000 steps per second in real time: rigid-body dynamics, six skirted air-cushion compartments with variable-pitch lift fans, skirt leakage, rear thrust fans, aerodynamic and skirt drag, ground contact, water buoyancy and a 24S14P lithium-ion pack with voltage sag and current limits. Board 91 kg, deck 1.8 × 0.72 m, skirt 15 cm. Fan maps, efficiencies and the pack are engineering assumptions, not measurements.</p>
-  <p class="note">Textures: Poly Haven (CC0).</p>
+  <p class="note">Textures: Poly Haven (CC0). Rider: Mixamo-rigged "Soldier" character from the three.js examples, with Mixamo idle/walk clips and a physics-driven riding pose.</p>
 </div>
 
 <div class="intro" id="intro">
@@ -158,6 +158,7 @@ body { background: var(--bg); color: var(--ink); font: 14px/1.4 var(--body); ove
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="physics.js"></script>
 <script>
 (() => {
@@ -339,6 +340,54 @@ const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 18, 14), skin); head.
 const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.125, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2), helm); helmet.position.y = hips + 0.75; body.add(helmet);
 const armL = limb(0.05, 0.55, shirt), armR = limb(0.05, 0.55, shirt); armL.position.set(0.21, hips + 0.56, 0); armR.position.set(-0.21, hips + 0.56, 0); body.add(armL, armR);
 rider.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+// Mixamo "Soldier" character (three.js examples, r128): Idle / Walk clips + procedural riding pose.
+// The capsule figure above stays as a fallback until (or if) the model fails to load.
+let soldier = null, mixer = null, walkW = 0;
+const acts = {}, bones = {};
+const POSE = { hipFlex: 0.55, knee: 1.0, spread: 0.32, armOut: 1.0, crouchDrop: 0.13 };
+// The model ships as base64 text (the host serves .txt, not .glb); decode and hand the bytes to the glTF parser.
+if (THREE.GLTFLoader) fetch("models/soldier.glb.b64.txt").then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); }).then((b64) => {
+  const bin = atob(b64.trim()), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Promise((res, rej) => new THREE.GLTFLoader().parse(bytes.buffer, "models/", res, rej));
+}).then((g) => {
+  soldier = g.scene;
+  const box = new THREE.Box3().setFromObject(soldier);
+  soldier.scale.setScalar(1.75 / (box.max.y - box.min.y));               // rider height 1.75 m, as in the physics model
+  soldier.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } if (o.isBone) bones[o.name] = o; });
+  mixer = new THREE.AnimationMixer(soldier);
+  for (const clip of g.animations) acts[clip.name] = mixer.clipAction(clip);
+  acts.Idle.play(); acts.Walk.play(); acts.Walk.setEffectiveWeight(0);
+  soldier.rotation.y = Math.PI;                                          // model faces -z; rider frame faces +z
+  rider.add(soldier); body.visible = false;
+}).catch((e) => console.warn("character model failed to load; using the simple figure", e));
+// Pose offsets are applied about CHARACTER-space axes (model space: forward = -z, up = +y, character's right = +x),
+// converted into each bone's local frame, because Mixamo bone axes differ per bone and per clip.
+const AX = new THREE.Vector3(1, 0, 0), AZ = new THREE.Vector3(0, 0, 1);
+const _qa = new THREE.Quaternion(), _qp = new THREE.Quaternion(), _qs = new THREE.Quaternion(), _qd = new THREE.Quaternion();
+function bend(name, axis, ang) {
+  const b = bones[name]; if (!b || !ang) return;
+  soldier.getWorldQuaternion(_qs).invert();
+  b.parent.getWorldQuaternion(_qp); _qp.premultiply(_qs);               // parent orientation in character space
+  _qa.setFromAxisAngle(axis, ang);
+  _qd.copy(_qp).invert().multiply(_qa).multiply(_qp);                   // character-space rotation in the bone's parent frame
+  b.quaternion.premultiply(_qd);
+  b.updateMatrixWorld(true);
+}
+function ridePose(k, armK) {
+  // k: crouch 0..1, armK: arms-out amount. Signs (model space): +X swings a limb forward, +Z swings it toward +x (character's right)
+  soldier.updateMatrixWorld(true);
+  bend("mixamorigSpine", AX, -0.22 * k);                                 // lean the chest forward over the knees
+  for (const [s, side] of [["Left", -1], ["Right", 1]]) {
+    bend(`mixamorig${s}UpLeg`, AX, POSE.hipFlex * k);                   // thigh forward
+    bend(`mixamorig${s}UpLeg`, AZ, side * POSE.spread);                 // feet apart along the deck
+    bend(`mixamorig${s}Leg`, AX, -POSE.knee * k);                       // shin back = knee bend
+    bend(`mixamorig${s}Foot`, AX, (POSE.knee - POSE.hipFlex) * 0.5 * k); // keep the sole flat on the deck
+    bend(`mixamorig${s}Arm`, AZ, side * POSE.armOut * armK);            // arms out for balance
+  }
+  soldier.position.y = -POSE.crouchDrop * k;
+}
+
 let riderWorld = new THREE.Vector3(0, 0, -1.0);          // where the rider stands when off the board
 let riderBlend = 0;
 let riderOffQ = new THREE.Quaternion();
@@ -502,6 +551,18 @@ function frame(now) {
   legL.rotation.x = -knee * 0.6; legR.rotation.x = -knee * 0.6; shinL.rotation.x = knee * 1.2; shinR.rotation.x = knee * 1.2;
   body.position.y = -0.06 * knee; armL.rotation.z = 0.25 + 0.35 * riderBlend; armR.rotation.z = -0.25 - 0.35 * riderBlend;
   body.rotation.x = -0.12 * sim.ctl.stick[0] * riderBlend;
+  if (mixer) {
+    // walk clip while the weight is transferring (stepping on/off), idle otherwise; riding pose layered on top
+    const stepping = sim.riderFrac > 0.02 && sim.riderFrac < 0.98;
+    walkW += ((stepping ? 1 : 0) - walkW) * Math.min(1, real * 8);
+    acts.Walk.setEffectiveWeight(walkW); acts.Idle.setEffectiveWeight(1 - walkW);
+    mixer.update(simDt);
+    const ride = Math.max(0, (sim.riderFrac - 0.5) * 2);       // pose blends in over the second half of the step
+    const crouch = ride * (0.5 + (sim.ctl.hop ? 0.35 : 0) + 0.1 * Math.abs(sim.ctl.stick[1]));
+    ridePose(crouch, ride);
+    // lean toward the nose when accelerating (nose is on the rider's right: lean = rotation about -z), back when braking
+    bend("mixamorigSpine", AZ, -0.18 * sim.ctl.stick[0] * ride);
+  }
 
   emit(simDt, tel); stepParticles(simDt);
   waterNormal.offset.x += simDt * 0.02; waterNormal.offset.y += simDt * 0.013;
