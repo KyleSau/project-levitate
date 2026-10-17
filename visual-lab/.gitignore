@@ -1,0 +1,13 @@
+.venv/
+node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/*.sqlite
+data/*.sqlite-journal
+data/jobs/
+data/*.log
+data/pids.json
+data/results/
+data/rom/harness_ehd_latest.json
