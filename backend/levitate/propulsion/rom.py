@@ -1,0 +1,127 @@
+"""Export the reduced-order data the browser model uses, plus Python reference trajectories for the JS tests.
+
+    cd backend && python -m levitate.propulsion.rom
+
+writes
+  sim/propulsion/site/rom_data.js          window.PROP_ROM = {...}  (also a CommonJS module for Node)
+      realgas tables (sub-sampled from the EOS tables), every nominal assumption value, hazard thresholds,
+      Python-integrated blowdown curves (solve_ivp), comparison baselines, study summaries (if present)
+  sim/propulsion/reference/*.json          Python fixed-step trajectories (same algorithm, same tables) that
+                                           sim/propulsion/test_propulsion.js must reproduce
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from .assumptions import all_assumption_sets, hazard_thresholds
+from .coldgas import ColdGasSystem, TankConfig, ThrusterConfig, energy_report
+from .gas import write_rom_tables
+
+ROOT = Path(__file__).resolve().parents[3]
+SITE = ROOT / "sim" / "propulsion" / "site"
+REF = ROOT / "sim" / "propulsion" / "reference"
+STUDY_SUMMARY = Path(__file__).resolve().parent / "data" / "study_summary.json"
+
+
+def _r(x, n=6):
+    if isinstance(x, float):
+        return float(f"{x:.{n}g}")
+    if isinstance(x, (list, tuple)):
+        return [_r(v, n) for v in x]
+    if isinstance(x, dict):
+        return {k: _r(v, n) for k, v in x.items()}
+    return x
+
+
+def blowdown_curves() -> dict:
+    out = {}
+    for name, tk, th in [
+        ("skate_6.8L_300bar_reg30", TankConfig(), ThrusterConfig()),
+        ("skate_6.8L_300bar_adiabatic", TankConfig(thermal="adiabatic"), ThrusterConfig()),
+        ("skate_6.8L_300bar_isothermal", TankConfig(thermal="isothermal"), ThrusterConfig()),
+        ("skate_6.8L_300bar_ideal_gas", TankConfig(real_gas=False), ThrusterConfig()),
+    ]:
+        s = ColdGasSystem(tk, th)
+        r = s.blowdown_ivp(n_out=120)
+        out[name] = _r({k: r[k] for k in ("t", "p_tank", "T_tank", "thrust", "isp", "m")} |
+                       {"impulse": r["impulse"], "mass_used": r["mass_used"], "t_stop": r["t_stop"]}, 5)
+    return out
+
+
+def baselines() -> dict:
+    """Comparison numbers from the existing Project Levitate models (read, not modified)."""
+    from ..human_scale import HumanDesign, evaluate_human
+    duct = evaluate_human(HumanDesign(concept="ducted_electric", lift_area_m2=1.8, n_units=6, mission_min=7.5)).scenarios["nominal"]
+    cush = evaluate_human(HumanDesign(concept="air_cushion", lift_area_m2=1.0, n_units=6, mission_min=19)).scenarios["nominal"]
+    jet = evaluate_human(HumanDesign(concept="turbojet", n_units=6, mission_min=3)).scenarios["nominal"]
+    return {
+        "ducted_fan": {"label": "Electric ducted-fan platform (1.8 m2, RESEARCH_LOG session 2)", "gross_kg": 282.0,
+                       "power_kw": 107.0, "endurance_min": 7.5, "jet_m_s": 45.0, "cost_usd": 25000.0, "closes": True,
+                       "source": "docs/RESEARCH_LOG.md smallest closing battery-electric ducted design (nominal)",
+                       "recomputed_here": {"gross_kg": duct.gross_kg, "power_kw": duct.hover_power_kw,
+                                           "endurance_min": duct.endurance_min, "note": "human_scale defaults, 6 fans, 7.5 min"}},
+        "air_cushion": {"label": "LV-H1 air-cushion board (sim/hoverboard-h1)", "gross_kg": 182.0, "power_kw": 7.5,
+                        "endurance_min": 40.0, "battery_kwh": 5.4, "edge_jet_m_s": 49.0, "cost_usd": cush.cost_usd,
+                        "source": "sim/hoverboard-h1 physics.js with a 200 lb rider: ~7.5 kW, ~40 min on 5.4 kWh; "
+                                  "human_scale nominal cost"},
+        "turbojet": {"label": "Micro-turbojet board (human_scale)", "gross_kg": jet.gross_kg, "endurance_min": jet.endurance_min,
+                     "jet_m_s": jet.jet_velocity_m_s, "cost_usd": jet.cost_usd, "source": "levitate.human_scale nominal"},
+    }
+
+
+def export(write_reference: bool = True) -> dict:
+    tables = write_rom_tables()
+    aset = {k: s.values("nominal") for k, s in all_assumption_sets().items()}
+    rom = {
+        "generated_by": "levitate.propulsion.rom",
+        "realgas": tables,
+        "assumptions": aset,
+        "assumption_meta": {k: {a.key: {"desc": a.description, "unit": a.unit, "low": a.low, "high": a.high,
+                                        "status": a.status.value, "source": a.source} for a in s.items.values()}
+                            for k, s in all_assumption_sets().items()},
+        "hazards": {k: v[0] for k, v in hazard_thresholds().items()},
+        "blowdown": blowdown_curves(),
+        "tank_report_default": _r(energy_report(TankConfig()).model_dump(), 5),
+        "baselines": _r(baselines(), 5),
+        "studies": json.loads(STUDY_SUMMARY.read_text(encoding="utf-8")) if STUDY_SUMMARY.exists() else None,
+    }
+    SITE.mkdir(parents=True, exist_ok=True)
+    body = json.dumps(rom, separators=(",", ":"))
+    (SITE / "rom_data.js").write_text(
+        "/* generated by levitate.propulsion.rom - do not edit */\n"
+        "(function (root) { const ROM = " + body + ";\n"
+        "if (typeof module !== 'undefined' && module.exports) module.exports = ROM; else root.PROP_ROM = ROM;\n"
+        "})(typeof window !== 'undefined' ? window : globalThis);\n")
+    if write_reference:
+        write_references()
+    return rom
+
+
+def write_references() -> None:
+    from .skateboard import Controls, SkateConfig, SkateSim, default_scenario
+
+    REF.mkdir(parents=True, exist_ok=True)
+    cases = {
+        "skate_default": (SkateConfig(tank=TankConfig(rom_table=True)), default_scenario(True), 25.0),
+        "skate_surprised_rider": (SkateConfig(tank=TankConfig(rom_table=True), rider_anticipates=False, boost_ramp_s=0.0),
+                                  [(0.0, Controls(throttle=1.0)), (3.0, Controls(throttle=1.0, boost=True))], 8.0),
+        "skate_ideal_adiabatic": (SkateConfig(tank=TankConfig(real_gas=False, thermal="adiabatic"), electric=False),
+                                  [(0.0, Controls(boost=True))], 12.0),
+    }
+    for name, (cfg, sc, t_end) in cases.items():
+        sim = SkateSim(cfg)
+        rec = sim.run(sc, t_end, record_every=50)
+        doc = {"config": json.loads(cfg.model_dump_json()), "scenario": [[t, c.model_dump()] for t, c in sc],
+               "t_end": t_end, "record_every": 50, "trace": rec}
+        (REF / f"{name}.json").write_text(json.dumps(doc, default=float))
+    try:
+        from .hover import write_hover_references
+        write_hover_references(REF)
+    except ImportError:
+        pass
+
+
+if __name__ == "__main__":
+    r = export()
+    print("rom_data.js:", (SITE / "rom_data.js").stat().st_size, "bytes")
