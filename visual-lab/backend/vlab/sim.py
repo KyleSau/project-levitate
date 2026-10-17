@@ -292,6 +292,7 @@ def _package(req, mc, rm, plant, feas, rec, ap, flags, wall, max_pen, t_end) -> 
     }
     return {
         "name": req.name, "summary": {k: (_r(v) if isinstance(v, float) else v) for k, v in summary.items()},
+        "requirements": segment_requirements(ch, ap.steps),
         "events": ap.events, "phases": phases, "feasibility": feas,
         "vehicle": vehicle_payload(rm, plant), "labels": rm.labels, "power_model": rm.power.model,
         "air": {"rho": rm.rho, "mu": rm.mu, "source": rm.air_source},
@@ -316,3 +317,30 @@ def vehicle_payload(rm, plant: Plant) -> dict:
         "added_mass_kg": list(v.added_mass_kg), "drag": v.drag.model_dump(), "contact": v.contact.model_dump(),
         "B": plant.B.tolist(), "hypothetical": rm.hypothetical,
     }
+
+
+def segment_requirements(ch: dict, steps) -> list[dict]:
+    """Force / torque / power actually required (as produced by the controller) per manoeuvre segment."""
+    ph = np.array(ch["phase"])
+    Fa = np.array(ch["F_act"])
+    fa = np.array(ch["f_act"])
+    ta = np.array(ch["tau_act"])
+    pw = np.array(ch["power_w"])
+    en = np.array(ch["energy_j"])
+    eu = np.array(ch["euler_deg"])
+    acc = np.array(ch["acc"])
+    out = []
+    for i, s in enumerate(steps):
+        m = ph == i
+        if not m.any():
+            continue
+        out.append({"index": i, "segment": s.segment, "label": s.label or s.kind,
+                    "duration_s": float(np.array(ch["t"])[m][-1] - np.array(ch["t"])[m][0]),
+                    "max_total_force_n": float(np.linalg.norm(Fa[m], axis=1).max()),
+                    "mean_total_force_n": float(np.linalg.norm(Fa[m], axis=1).mean()),
+                    "max_actuator_force_n": float(fa[m].max()), "min_actuator_force_n": float(fa[m].min()),
+                    "max_abs_torque_nm": np.abs(ta[m]).max(axis=0).tolist(),
+                    "max_tilt_deg": float(np.abs(eu[m][:, 0:2]).max()),
+                    "max_accel_m_s2": float(np.linalg.norm(acc[m], axis=1).max()),
+                    "peak_power_w_estimate": float(pw[m].max()), "energy_j_estimate": float(en[m][-1] - en[m][0])})
+    return out

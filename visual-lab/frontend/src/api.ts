@@ -141,7 +141,14 @@ export interface SimResult {
   gains: Record<string, unknown>;
   mode_config: ModeConfig;
   integrator: string;
+  requirements?: Requirement[];
   trajectory: Trajectory;
+}
+
+export interface Requirement {
+  index: number; segment: string; label: string; duration_s: number; max_total_force_n: number; mean_total_force_n: number;
+  max_actuator_force_n: number; min_actuator_force_n: number; max_abs_torque_nm: V3; max_tilt_deg: number;
+  max_accel_m_s2: number; peak_power_w_estimate: number; energy_j_estimate: number;
 }
 
 // ModeConfig is kept loosely typed: the parameter editor edits it generically.
