@@ -9,3 +9,7 @@ __pycache__/
 data/*.sqlite
 data/*.sqlite-journal
 .venv-prop/
+
+# Mixamo character files are not redistributed (loaded from the three.js repo at runtime)
+**/models/*.glb
+**/models/*.b64.txt

@@ -130,10 +130,14 @@ const fallback = new THREE.Group(); riderLean.add(fallback);
   fallback.traverse((o) => { if (o.isMesh) o.castShadow = true; }); }
 let soldier = null, mixer = null; const acts = {}, bones = {};
 const POSE = { hipFlex: 0.45, knee: 0.8, spread: 0.30, armOut: 0.9, crouchDrop: 0.10 };
-if (THREE.GLTFLoader) fetch("models/soldier.glb.b64.txt").then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); }).then((b64) => {
-  const bin = atob(b64.trim()), bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Promise((res, rej) => new THREE.GLTFLoader().parse(bytes.buffer, "models/", res, rej));
+// Rider model: Mixamo "Soldier" from the three.js examples. Not redistributed in this repo (Mixamo terms): a local base64 copy
+// is used if present (private deployments), otherwise it is loaded directly from the three.js repository at runtime.
+const SOLDIER_URL = "https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/models/gltf/Soldier.glb";
+if (THREE.GLTFLoader) fetch("models/soldier.glb.b64.txt").then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); })
+  .catch(() => fetch(SOLDIER_URL).then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })).then((data) => {
+  let buf = data;                                   // ArrayBuffer (remote GLB) or base64 text (local copy)
+  if (typeof data === "string") { const bin = atob(data.trim()), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); buf = bytes.buffer; }
+  return new Promise((res, rej) => new THREE.GLTFLoader().parse(buf, "models/", res, rej));
 }).then((g) => {
   soldier = g.scene;
   const box = new THREE.Box3().setFromObject(soldier);
