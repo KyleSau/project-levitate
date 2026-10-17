@@ -1,5 +1,50 @@
 # Project Levitate research log
 
+## 2026-10-17 — Session 2: bench-test kit, human-scale study with debris limits
+
+### Bench test (motor, fan, battery)
+Not performed: it needs physical hardware. Prepared instead (docs/BENCH_TEST.md): parts list (~$60–90 stand), Arduino firmware
+(HX711 thrust cell, INA226 power, optional tach and torque cell, current/voltage kill limits), PC logger (sweep, step, discharge
+modes) and `levitate.bench` analysis. The analysis fits FM, motor efficiency, duct effectiveness, battery usable energy and internal
+resistance, and motor time constant, then writes `data/measurements/assumptions_measured.json`, which the harness overlays as
+MEASURED assumptions. The fitting code recovers known parameters from synthetic logs to within 2 % (tests; synthetic data is code
+verification only, not a measurement). **No measured data exists yet.**
+
+### Human-scale study (rider 90.7 kg = 200 lb), asphalt surface [A]
+Model: `levitate.human_scale`, five concepts, mass closure, hold 1.3 × weight with any one lift unit failed, downwash/edge-jet
+velocity as the debris metric. Three NSGA-II studies of 2000 designs each (#5 nominal, #6 must close at pessimistic assumptions,
+#7 free flight only).
+
+Physics finding (exact, no assumptions): in hover the jet's momentum flux equals the weight, so jet speed is fixed by jet area:
+v = sqrt(W / (ρ A_exit)). For ~200 kg, keeping the jet below 12 m/s needs ≥ 8.5 m² of duct exit area; below 25 m/s needs ≥ 2 m².
+Low debris and a rider-sized board are incompatible for any free-flying air-breathing vehicle.
+
+| Concept | Board-sized (≤ 0.8 m²)? | Smallest closing design (nominal) | Robust (pessimistic)? |
+|---|---|---|---|
+| Battery-electric ducted fans | does not close (jet 180–260 m/s, >1 MW runaway) | 1.8 m², 282 kg, 107 kW, 45 m/s jet, 7.5 min | only at ~48 m² ($130k) |
+| Battery-electric open rotors | does not close | 2.7 m², 132 kW, 56 m/s | only at ~41 m² |
+| Ducted fans + engine-generator | does not close | 2.5 m², 94 kW, 33 m/s, 14 min | none closed |
+| Micro turbojets | **closes**: 0.6 m², ~162 kg, 3 min | — | yes, but 500 m/s, ~650 °C exhaust |
+| **Air cushion (skirted plenum)** | closes at 0.34 m² but 94 m/s edge jet and a tiny stance | **~1.0 m² deck (≈1.6 × 0.64 m): 138 kg, 3 kW, 49 m/s edge sheet, ~19 min, ~$9k** | **yes** |
+
+* The air-cushion board is the only concept that is board-sized, closes under pessimistic assumptions, needs single-digit kW and
+  keeps debris to a thin horizontal sheet at the skirt hem. It does not fly: it rides millimetres to centimetres above the surface.
+  Larger decks cut the edge jet (25 m/s at ~4 m², 12 m/s at ~19 m²) and power (≤ 1 kW).
+* Short grass (30 mm roughness) multiplies cushion power ×4–7 with this hem-gap model; real hovercraft use deep finger skirts that
+  ride on the grass, which this model does not capture. Needs a skirt-leakage experiment.
+* Electric free flight works only as a platform (≥ ~2 m² of fans) and is not robust: pessimistic battery specific power (1 kW/kg)
+  and fan efficiency make the mass closure run away. Battery-pack power density is the measurement that matters most here.
+* Economics (nominal, parts only): air-cushion board ~$9–15k, about $0.10–0.30 of electricity per 20 min ride; electric free-flight
+  platform $25–130k for 7–8 min; turbojet board ~$50k plus ~$40 of fuel per 3 min flight.
+
+### Next steps
+1. Bench test (kit ready) for the mini board.
+2. Air-cushion line: scale model (1:4, ~2 kg) of a skirted plenum board to measure leakage Cd, skirt behaviour on asphalt/grass/water,
+   and edge-jet velocity with a pitot/hot-wire. This validates the one human-scale concept that closes robustly.
+3. Rider stability on a cushion board (roll/pitch stiffness from plenum geometry, compartmented skirts) — add to the 6-DOF model.
+4. Free-flight platform: battery cell discharge-power test; ground-effect benefit of hovering low over the platform's own footprint.
+
+
 Evidence tags: **[A]** analytical estimate · **[SN]** simplified numerical simulation · **[HF]** high-fidelity numerical · **[M]** physically measured.
 No result in this log is **[M]** yet. Every endurance/thrust figure depends on assumptions listed in `/api/catalog` and must be measured (see VALIDATION_PLAN.md).
 

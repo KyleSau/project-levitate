@@ -214,6 +214,82 @@ def run_ead_study(db: ExperimentDB, cfg: EADStudyConfig, study_id: int | None = 
             "best_params": bt.params, "best_experiment_id": best_ids[bt.number], "best_summary": best["summary"]}
 
 
+# ------------------------------------------------------------------------------------ human scale
+class HumanStudyConfig(BaseModel):
+    n_trials: int = Field(1500, ge=1, le=20000)
+    seed: int = 5
+    concepts: list[str] = ["ducted_electric", "open_rotor_electric", "turbojet", "ducted_hybrid", "air_cushion"]
+    surface_roughness_mm: float = 3.0          # asphalt
+    require_scenario: str = "nominal"          # closure required in this scenario ("pessimistic" = robust)
+    max_jet_m_s: float | None = None
+    free_flight_only: bool = False
+
+
+def run_human_study(db: ExperimentDB, cfg: HumanStudyConfig, study_id: int | None = None,
+                    progress: Callable[[float], None] | None = None) -> dict:
+    from .human_scale import HumanDesign, evaluate_human
+
+    concepts = [c for c in cfg.concepts if not (cfg.free_flight_only and c == "air_cushion")]
+    study = optuna.create_study(directions=["minimize", "minimize", "maximize", "minimize"],
+                                sampler=optuna.samplers.NSGAIISampler(seed=cfg.seed, population_size=60))
+    ids: dict[int, int] = {}
+
+    def objective(trial):
+        c = trial.suggest_categorical("concept", concepts)
+        d = HumanDesign(
+            concept=c,
+            lift_area_m2=trial.suggest_float("lift_area_m2", 0.3, 30.0, log=True),
+            exit_area_ratio=trial.suggest_float("exit_area_ratio", 1.0, 1.5),
+            n_units=trial.suggest_int("n_units", 4, 16),
+            mission_min=trial.suggest_float("mission_min", 3.0, 60.0, log=True),
+            hover_gap_mm=trial.suggest_float("hover_gap_mm", 3.0, 30.0),
+            surface_roughness_mm=cfg.surface_roughness_mm)
+        rep = evaluate_human(d)
+        sc = rep.scenarios[cfg.require_scenario]
+        viol = [0.0 if sc.closes else 1.0 + sc.gross_kg / 1000]
+        if cfg.max_jet_m_s:
+            viol.append(max(0.0, sc.jet_velocity_m_s - cfg.max_jet_m_s))
+        for i, x in enumerate(viol):
+            trial.set_constraint(f"c{i}", x)
+        trial.set_user_attr("constraints", viol)
+        n = rep.scenarios["nominal"]
+        summ = {"verdict": rep.verdict, "concept": c, "gross_kg": round(n.gross_kg, 1), "hover_kw": round(n.hover_power_kw, 2),
+                "jet_m_s": round(n.jet_velocity_m_s, 1), "footprint_m2": round(n.footprint_m2, 2), "form": n.form,
+                "endurance_min": round(n.endurance_min, 1), "cost_usd": round(n.cost_usd), "debris": n.debris.split(" ")[0]}
+        ids[trial.number] = db.add_experiment(kind="human_design", solver="levitate.human_scale", evidence=rep.evidence.value,
+                                              config=d.model_dump(), results=rep.model_dump(mode="json"), summary=summ,
+                                              verdict=rep.verdict, name=f"human-{trial.number}", study_id=study_id)
+        if progress:
+            progress((trial.number + 1) / cfg.n_trials)
+        if not sc.closes:
+            return 1e3, 1e3, 0.0, 1e7
+        return sc.jet_velocity_m_s, sc.footprint_m2, sc.endurance_min, sc.cost_usd
+
+    study.optimize(objective, n_trials=cfg.n_trials)
+    front, seen = [], set()
+    for t in study.best_trials:
+        if any(v > 0 for v in t.user_attrs["constraints"]):
+            continue
+        key = (t.params["concept"], round(t.values[0]), round(t.values[1], 1), round(t.values[2]))
+        if key in seen:
+            continue
+        seen.add(key)
+        front.append({"experiment_id": ids[t.number], "concept": t.params["concept"], "jet_m_s": round(t.values[0], 1),
+                      "footprint_m2": round(t.values[1], 2), "endurance_min": round(t.values[2], 1),
+                      "cost_usd": round(t.values[3]), "params": t.params})
+    front.sort(key=lambda r: (r["jet_m_s"], r["footprint_m2"]))
+    n_ok = sum(1 for t in study.trials if all(v <= 0 for v in t.user_attrs.get("constraints", [1])))
+    by_concept = {}
+    for t in study.trials:
+        c = t.params["concept"]
+        ok = all(v <= 0 for v in t.user_attrs.get("constraints", [1]))
+        b = by_concept.setdefault(c, {"tried": 0, "closed": 0})
+        b["tried"] += 1
+        b["closed"] += int(ok)
+    return {"n_trials": len(study.trials), "n_closed": n_ok, "by_concept": by_concept, "pareto": front,
+            "objectives": ["jet_m_s", "footprint_m2", "endurance_min", "cost_usd"], "config": cfg.model_dump()}
+
+
 # ------------------------------------------------------------------------------------ sensitivity
 def sensitivity(d: Design) -> list[dict]:
     """One-at-a-time tornado: each assumption to its low and high value, others nominal."""

@@ -147,4 +147,24 @@ def global_assumptions() -> AssumptionSet:
     add(Assumption(key="prop_mass_coeff", description="Propeller/fan mass at 31 mm diameter (scales ~D^2.5)",
                    nominal=0.30, low=0.20, high=0.45, unit="g", favourable="low", status=CAT,
                    source="31 mm whoop props ~0.2-0.4 g each"))
+    _overlay_measurements(s)
     return s
+
+
+def _overlay_measurements(s: AssumptionSet) -> None:
+    """Replace assumptions with bench-measured values when data/measurements/assumptions_measured.json exists
+    (written by levitate.bench). Set LEVITATE_IGNORE_MEASURED=1 to evaluate with the original assumptions."""
+    import json
+    import os
+    from pathlib import Path
+
+    if os.environ.get("LEVITATE_IGNORE_MEASURED"):
+        return
+    f = Path(__file__).resolve().parents[2] / "data" / "measurements" / "assumptions_measured.json"
+    if not f.exists():
+        return
+    for k, v in json.loads(f.read_text()).items():
+        if k in s.items:
+            a = s.items[k]
+            s.items[k] = a.model_copy(update={"nominal": v["nominal"], "low": v["low"], "high": v["high"],
+                                              "status": SourceStatus.MEASURED, "source": v["source"]})

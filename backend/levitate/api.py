@@ -1,4 +1,4 @@
-"""FastAPI service for the research harness (port 8000). See docs/API_CONTRACT.md."""
+﻿"""FastAPI service for the research harness (port 8000). See docs/API_CONTRACT.md."""
 from __future__ import annotations
 
 import threading
@@ -17,8 +17,9 @@ from .db import ExperimentDB
 from .design import Design
 from .ehd_board import EADDesign, ehd_assumptions, evaluate_ead, load_surrogate
 from .evaluate import evaluate
-from .optimize import (EADStudyConfig, RotorStudyConfig, ead_sensitivity, plan_from_goal, run_ead_study,
-                       run_rotor_study, sensitivity, sweep)
+from .human_scale import HumanDesign, evaluate_human, human_assumptions
+from .optimize import (EADStudyConfig, HumanStudyConfig, RotorStudyConfig, ead_sensitivity, plan_from_goal,
+                       run_ead_study, run_human_study, run_rotor_study, sensitivity, sweep)
 from .physics import rotor as rotor_model
 from .physics.battery import V_OC_AVG_PER_CELL, max_deliverable_power
 from .physics.dynamics import SimConfig
@@ -101,6 +102,32 @@ def evaluate_ead_ep(req: EADEvalRequest):
             config=req.design.model_dump(), results=out, summary=ead_summary(rep), verdict=rep.verdict,
             name=req.design.name)
     return out
+
+
+class HumanEvalRequest(BaseModel):
+    design: HumanDesign
+    overrides: dict[str, float] | None = None
+    save: bool = False
+
+
+@app.post("/api/evaluate/human")
+def evaluate_human_ep(req: HumanEvalRequest):
+    rep = evaluate_human(req.design, req.overrides)
+    out = rep.model_dump(mode="json")
+    if req.save:
+        n = rep.scenarios["nominal"]
+        out["experiment_id"] = DB.add_experiment(
+            kind="human_design", solver="levitate.human_scale", evidence=rep.evidence.value,
+            config=req.design.model_dump(), results=out, verdict=rep.verdict,
+            summary={"concept": req.design.concept, "gross_kg": round(n.gross_kg, 1), "hover_kw": round(n.hover_power_kw, 2),
+                     "jet_m_s": round(n.jet_velocity_m_s, 1), "footprint_m2": round(n.footprint_m2, 2),
+                     "endurance_min": round(n.endurance_min, 1), "cost_usd": round(n.cost_usd)})
+    return out
+
+
+@app.get("/api/human/assumptions")
+def human_assumptions_ep():
+    return [a.model_dump() for a in human_assumptions().items.values()]
 
 
 class WireRequest(BaseModel):
@@ -249,6 +276,8 @@ def _run_study(study_id: int, kind: str, config: dict):
             result = run_rotor_study(DB, RotorStudyConfig(**config), study_id, prog)
         elif kind == "ead_study":
             result = run_ead_study(DB, EADStudyConfig(**config), study_id, prog)
+        elif kind == "human_study":
+            result = run_human_study(DB, HumanStudyConfig(**config), study_id, prog)
         else:
             raise ValueError(f"unknown study kind {kind}")
         DB.update_study(study_id, status="done", progress=1.0, result=result)
@@ -258,9 +287,10 @@ def _run_study(study_id: int, kind: str, config: dict):
 
 @app.post("/api/studies")
 def create_study(req: StudyRequest):
-    if req.kind not in ("rotor_study", "ead_study"):
-        raise HTTPException(400, "kind must be rotor_study or ead_study")
-    cfg = (RotorStudyConfig if req.kind == "rotor_study" else EADStudyConfig)(**req.config).model_dump()
+    kinds = {"rotor_study": RotorStudyConfig, "ead_study": EADStudyConfig, "human_study": HumanStudyConfig}
+    if req.kind not in kinds:
+        raise HTTPException(400, f"kind must be one of {list(kinds)}")
+    cfg = kinds[req.kind](**req.config).model_dump()
     sid = DB.create_study(req.name or f"{req.kind} {time.strftime('%Y-%m-%d %H:%M')}", req.kind, cfg, req.goal)
     threading.Thread(target=_run_study, args=(sid, req.kind, cfg), daemon=True).start()
     return {"study_id": sid, "config": cfg}
