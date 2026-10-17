@@ -6,10 +6,12 @@ import ResearchConsole from "./pages/ResearchConsole";
 import Survey from "./pages/Survey";
 import EhdLab from "./pages/EhdLab";
 import HumanLab from "./pages/HumanLab";
+import PropulsionLab from "./pages/propulsion/PropulsionLab";
 
 const TABS = [
   ["lab", "Testing Chamber"],
   ["human", "Human Scale"],
+  ["propulsion", "Propulsion Lab"],
   ["ehd", "Ionic-Wind Lab"],
   ["survey", "Propulsion Survey"],
   ["explorer", "Experiment Explorer"],
@@ -48,6 +50,7 @@ export default function App() {
         {tab === "lab" && <Lab loadExperiment={loadExp} />}
         {tab === "ehd" && <EhdLab />}
         {tab === "human" && <HumanLab />}
+        {tab === "propulsion" && <PropulsionLab />}
         {tab === "survey" && <Survey />}
         {tab === "explorer" && <Explorer onOpen={(id) => { setLoadExp(id); setTab("lab"); }} />}
         {tab === "console" && <ResearchConsole onOpen={(id) => { setLoadExp(id); setTab("lab"); }} />}

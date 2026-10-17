@@ -33,6 +33,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 DB = ExperimentDB()
 SCHEMA_VERSION = "levitate.experiment-result/v1"
 
+# propulsion experiments (cold-gas skateboard, cold-gas and rocket hoverboards): /api/propulsion/...
+from .propulsion.api import make_router as _make_propulsion_router  # noqa: E402
+
+app.include_router(_make_propulsion_router(DB))
+
 
 # ------------------------------------------------------------------------------------------- basics
 @app.get("/api/health")

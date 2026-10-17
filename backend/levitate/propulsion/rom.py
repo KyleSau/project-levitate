@@ -56,9 +56,11 @@ def baselines() -> dict:
     cush = evaluate_human(HumanDesign(concept="air_cushion", lift_area_m2=1.0, n_units=6, mission_min=19)).scenarios["nominal"]
     jet = evaluate_human(HumanDesign(concept="turbojet", n_units=6, mission_min=3)).scenarios["nominal"]
     return {
-        "ducted_fan": {"label": "Electric ducted-fan platform (human_scale, 1.8 m2)", "gross_kg": duct.gross_kg,
-                       "power_kw": duct.hover_power_kw, "endurance_min": duct.endurance_min, "jet_m_s": duct.jet_velocity_m_s,
-                       "cost_usd": duct.cost_usd, "closes": duct.closes, "source": "levitate.human_scale nominal"},
+        "ducted_fan": {"label": "Electric ducted-fan platform (1.8 m2, RESEARCH_LOG session 2)", "gross_kg": 282.0,
+                       "power_kw": 107.0, "endurance_min": 7.5, "jet_m_s": 45.0, "cost_usd": 25000.0, "closes": True,
+                       "source": "docs/RESEARCH_LOG.md smallest closing battery-electric ducted design (nominal)",
+                       "recomputed_here": {"gross_kg": duct.gross_kg, "power_kw": duct.hover_power_kw,
+                                           "endurance_min": duct.endurance_min, "note": "human_scale defaults, 6 fans, 7.5 min"}},
         "air_cushion": {"label": "LV-H1 air-cushion board (sim/hoverboard-h1)", "gross_kg": 182.0, "power_kw": 7.5,
                         "endurance_min": 40.0, "battery_kwh": 5.4, "edge_jet_m_s": 49.0, "cost_usd": cush.cost_usd,
                         "source": "sim/hoverboard-h1 physics.js with a 200 lb rider: ~7.5 kW, ~40 min on 5.4 kWh; "
