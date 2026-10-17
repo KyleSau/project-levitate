@@ -41,6 +41,8 @@ Run: `cd visual-lab\backend; ..\.venv\Scripts\python -m pytest -q`
   simulated vehicle never leaves the ground (clearance < 1 cm), `TAKEOFF_FAILED` logged.
 * Battery exhausted mid-hover: `BATTERY_DEPLETED`, falls and stops on the ground without penetrating.
 * Step-size independence (1 ms vs 0.5 ms) < 2 mm; RK4 vs DOP853 closed loop < 0.1 mm.
+* Manual check (not in the suite, 18 s): full A–G demo mission RK4 (1 ms) vs DOP853 per control interval:
+  max position difference 7.3 µm over 32 s, both complete with 2 takeoffs / 1 landing.
 * Actuator failure injection reported and enforced.
 
 ## Solvers & exchange (`tests/test_solvers_exchange.py`)
